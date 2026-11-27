@@ -1,0 +1,156 @@
+name: PR Intake & 3-Peer-Review Gate
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-intake:
+    name: PR Intake & Policy Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate VSP-XX claim, AI disclosure, scope & naming hygiene
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = pr.number;
+            const title = pr.title || '';
+            const body = pr.body || '';
+            const combined = `${title}\n${body}`;
+            const errors = [];
+
+            // 1. Require VSP-XX claim ID and linked issue #NNN
+            if (!/\bVSP-\d{2}\b/.test(combined)) {
+              errors.push('Missing claimed roadmap task ID (e.g., `VSP-01`) in PR title or body. Claim a task in ROADMAP.md first.');
+            }
+            if (!/#\d+/.test(body)) {
+              errors.push('Missing linked Task Claim issue reference (e.g., `#123`) in PR body.');
+            }
+
+            // 2. Require explicit AI disclosure selection from PR template
+            const noAi = /- \[x\]\s*No AI coding tools were used/i.test(body);
+            const usedAi = /- \[x\]\s*AI coding tools were used/i.test(body);
+            if (!noAi && !usedAi) {
+              errors.push('Please select an AI Assistance Disclosure checkbox in the PR template.');
+            }
+            if (usedAi && !/AI coding tools were used.*:\s*\S+/i.test(body)) {
+              errors.push('AI coding tools were checked — please specify which model/tool and what you manually verified.');
+            }
+
+            // 3. Require local verification checklist boxes
+            if (!/- \[x\].*cargo test -p xtask/i.test(body)) {
+              errors.push('Verification checklist must confirm `cargo test -p xtask --locked` passed locally.');
+            }
+            if (!/- \[x\].*cargo clippy/i.test(body)) {
+              errors.push('Verification checklist must confirm strict `cargo clippy` passed locally.');
+            }
+
+            // 4. Restricted-terminology check on PR metadata and changed files (split tokens keep repo grep clean)
+            const tokens = [
+              'rock' + 'star',
+              'grand\\s+' + 'theft',
+              'scarlett' + '_master',
+              'cyber' + 'leek',
+              'take-?' + 'two',
+              'leo' + 'nida',
+              'vice\\s+' + 'city',
+              '\\bg' + 'ta\\b',
+              '\\bg' + 'ta6\\b',
+              '\\bg' + 'tavi\\b',
+            ];
+            const forbidden = new RegExp(`(${tokens.join('|')})`, 'i');
+            if (forbidden.test(combined)) {
+              errors.push('PR title/body contains restricted third-party studio, franchise, or executable names.');
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
+            });
+            for (const f of files) {
+              if (forbidden.test(f.filename) || (f.patch && forbidden.test(f.patch))) {
+                errors.push(`Restricted terminology detected in changed file: ${f.filename}`);
+                break;
+              }
+            }
+
+            if (files.length > 20) {
+              core.warning(`Large PR (${files.length} files changed). Keep PRs tightly scoped to the claimed VSP-XX task files.`);
+            }
+
+            if (errors.length > 0) {
+              core.setFailed(`PR Intake failed:\n- ${errors.join('\n- ')}`);
+            } else {
+              core.info(`PR intake passed (${files.length} files changed).`);
+            }
+
+  peer-review-gate:
+    name: 3 Independent Peer Reviews Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require 3 independent peer approvals before maintainer review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = pr.number;
+            const author = (pr.user && pr.user.login ? pr.user.login : '').toLowerCase();
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
+            });
+
+            // Track each non-author, non-bot reviewer's latest decisive review state
+            const latestByReviewer = new Map();
+            for (const r of reviews) {
+              const user = r.user && r.user.login ? r.user.login : '';
+              const low = user.toLowerCase();
+              const type = r.user && r.user.type ? r.user.type : '';
+              if (!user || low === author || type === 'Bot' || low.endsWith('[bot]')) {
+                continue;
+              }
+              if (['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(r.state)) {
+                latestByReviewer.set(user, r.state);
+              }
+            }
+
+            const approvers = [];
+            const blockers = [];
+            for (const [reviewer, state] of latestByReviewer.entries()) {
+              if (state === 'APPROVED') approvers.push(reviewer);
+              if (state === 'CHANGES_REQUESTED') blockers.push(reviewer);
+            }
+
+            core.info(`Independent peer approvals: ${approvers.length}/3 [${approvers.join(', ') || 'none'}]`);
+            if (blockers.length > 0) {
+              core.setFailed(`Unresolved CHANGES_REQUESTED from: ${blockers.join(', ')}`);
+              return;
+            }
+            if (approvers.length < 3) {
+              core.setFailed(
+                `Waiting on independent peer reviews: ${approvers.length}/3 APPROVED. ` +
+                `At least 3 distinct non-author contributors must audit & approve per CONTRIBUTING.md before maintainer review.`
+              );
+              return;
+            }
+            core.info('3 independent peer approvals reached — ready for maintainer review!');

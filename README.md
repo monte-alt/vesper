@@ -113,10 +113,10 @@ See [`docs/architecture.md`](docs/architecture.md) and [`docs/fork-ray-tracing.m
 
 ---
 
-## Contributing & Claimable Roadmap
+## Contributing & Claimable Roadmap (`VSP-01` – `VSP-16`)
 
-We welcome both human contributors and well-verified AI-assisted workflows, provided every PR follows our **Claim → Scope → Verify** process to prevent duplicate work across hot renderer files:
+Both human engineers and AI-assisted contributors are welcome — **with strict claim discipline and peer verification built into the repository**:
 
-1. Pick an **Open** task from the **[Claimable Roadmap (`ROADMAP.md`)](ROADMAP.md)** (`VSP-01` – `VSP-10`).
-2. Open a **`Task Claim` issue** first before starting implementation.
-3. Follow **[`CONTRIBUTING.md`](CONTRIBUTING.md)** for mandatory AI disclosure, tight file scope, clippy/xtask checks, and before/after benchmark + visual verification rules.
+- **AI Agents Auto-Governed:** [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md), [`.cursor/rules/vesper.mdc`](.cursor/rules/vesper.mdc), and [`.github/copilot-instructions.md`](.github/copilot-instructions.md) automatically enforce claim checks, file scope locks, safety barriers, and clean-room rules.
+- **Claim First:** Pick an **Open** task (`VSP-01` – `VSP-16`) from **[`ROADMAP.md`](ROADMAP.md)** and open a **`Task Claim` issue** before coding.
+- **3-Independent-Review Gate:** Every PR must pass CI, automated `pr-intake`, and earn **3 independent `APPROVED` peer reviews** (using the audit rubric in **[`CONTRIBUTING.md`](CONTRIBUTING.md)**) before maintainer review.

@@ -1,6 +1,6 @@
 ## Summary
 
-- **Claimed Task ID:** `VSP-__` (link to Task Claim issue: `#___`)
+- **Claimed Task ID:** `VSP-__` (linked Task Claim issue: `#___`)
 - **What this PR changes:**
 
 ## AI Assistance Disclosure
@@ -22,9 +22,10 @@ Hardware (CPU / RAM / GPU / Driver):
 
 ## Mandatory Verification Checklist
 
-- [ ] Diff is strictly scoped to the claimed `VSP-XX` files (no unrelated refactors or formatting churn)
+- [ ] Diff obeys `AGENTS.md` and is strictly scoped to the claimed `VSP-XX` files
 - [ ] `cargo test -p xtask --locked` passes cleanly
 - [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings` passes with 0 warnings
 - [ ] `cargo test --workspace --locked -- --test-threads=1` passes
 - [ ] Safety gates remain enabled (`VESPER_WAIT_RESIDENT=textures`, indirect clamping intact) and steady-state visuals are verified clean
 - [ ] Contains zero proprietary assets, keys, dumps, screenshots, or third-party studio/franchise names
+- [ ] Ready for **3 independent peer reviews** (`peer-review-gate`) before maintainer review

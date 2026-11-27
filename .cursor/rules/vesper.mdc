@@ -1,0 +1,15 @@
+---
+description: Mandatory Vesper contributor, claim-scope, clean-room, and PR verification rules
+globs:
+alwaysApply: true
+---
+
+# Vesper Rules (Always Applied)
+
+Read [`AGENTS.md`](../../AGENTS.md), [`ROADMAP.md`](../../ROADMAP.md), and [`CONTRIBUTING.md`](../../CONTRIBUTING.md) before editing or reviewing any file:
+
+1. **STOP Without a Claim:** If the user has not provided an open `VSP-XX` ID from `ROADMAP.md` and a GitHub `Task Claim` issue `#NNN`, do NOT edit code — list relevant open tasks and tell them to claim one first.
+2. **File-Scope Lock:** Only edit files inside the claimed task's `Primary Files` column in `ROADMAP.md`. No drive-by refactors or formatting churn.
+3. **Never Bypass Safety:** Never disable `VESPER_WAIT_RESIDENT=textures`, bypass `VESPER_INDIRECT_CLAMP`, or cull geometry to fake FPS.
+4. **Clean-Room Naming:** Zero proprietary game assets/keys/screenshots and zero third-party studio, franchise, or executable names in code, comments, commits, or PRs.
+5. **Required Checks & 3-Review Gate:** Run `cargo test -p xtask --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo test --workspace --locked -- --test-threads=1` before opening a PR. Every PR needs CI + `pr-intake` + **3 independent `APPROVED` peer reviews** before maintainer review.
