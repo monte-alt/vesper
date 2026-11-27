@@ -5463,6 +5463,7 @@ impl Host {
         stage.next("landing: read-backs, telling the title");
         let mut last = 0;
         let mut landed = Vec::new();
+        let mut released_tables = Vec::new();
         let mut telling = std::time::Instant::now();
         for item in items {
             telling = match item {
@@ -5477,9 +5478,11 @@ impl Host {
                     if let Some(own) = flight.own {
                         own.landed();
                     }
+                    released_tables.clear();
                     for detached in &mut flight.lists {
-                        detached.release_tables();
+                        detached.drain_tables_into(&mut released_tables);
                     }
+                    crate::descriptor::release_dynamic_batch(&released_tables);
                     landed.push((flight.lists, flight.order));
                     crate::land::spent(crate::land::stat::READ_BACKS, telling)
                 }

@@ -132,13 +132,20 @@ fn physical_only() -> bool {
     *ON.get_or_init(|| std::env::var_os("VESPER_PRESSURE_PHYSICAL").is_some_and(|v| v == "1"))
 }
 
+fn next_pressure_physical_with(was: bool, physical: u64, floor_mib: u64) -> bool {
+    let on = floor_mib.saturating_mul(MIB);
+    let off = floor_mib.saturating_add(1024).saturating_mul(MIB);
+    if was { physical < off } else { physical <= on }
+}
+
+#[cfg(test)]
 fn next_pressure_physical(was: bool, physical: u64) -> bool {
-    if was { physical < 2560 * MIB } else { physical <= 1536 * MIB }
+    next_pressure_physical_with(was, physical, 1536)
 }
 
 fn next_pressure(was: bool, physical: u64, commit: u64) -> bool {
     if physical_only() {
-        return next_pressure_physical(was, physical);
+        return next_pressure_physical_with(was, physical, crate::live_controls::pressure_free_mb());
     }
     if was {
         physical < 5 * GIB || commit < 6 * GIB
@@ -223,6 +230,14 @@ mod tests {
         assert!(next_pressure_physical(false, 1536 * MIB));
         assert!(next_pressure_physical(true, 2000 * MIB));
         assert!(!next_pressure_physical(true, 2560 * MIB));
+    }
+
+    #[test]
+    fn physical_pressure_respects_configurable_floor() {
+        assert!(!next_pressure_physical_with(false, 2800 * MIB, 2560));
+        assert!(next_pressure_physical_with(false, 2560 * MIB, 2560));
+        assert!(next_pressure_physical_with(true, 3500 * MIB, 2560));
+        assert!(!next_pressure_physical_with(true, 3584 * MIB, 2560));
     }
 
     #[test]

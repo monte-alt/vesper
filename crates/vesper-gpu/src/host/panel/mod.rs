@@ -1157,10 +1157,12 @@ mod tests {
         let menu_ov = paint_menu(&m, &cfg, Some(&snap));
         m.tab = menu::MenuTab::Lighting;
         let menu_lt = paint_menu(&m, &cfg, Some(&snap));
+        m.tab = menu::MenuTab::Pacing;
+        let menu_pc = paint_menu(&m, &cfg, Some(&snap));
         m.tab = menu::MenuTab::Lab;
         let menu_lb = paint_menu(&m, &cfg, Some(&snap));
 
-        for canvas in [&basic, &adv, &menu_ov, &menu_lt, &menu_lb] {
+        for canvas in [&basic, &adv, &menu_ov, &menu_lt, &menu_pc, &menu_lb] {
             let pitch = (canvas.w as u32 * 4).next_multiple_of(256) as usize;
             let packed = canvas.pack(1, DXGI_FORMAT_R10G10B10A2_UNORM, pitch);
             assert_eq!(packed.len(), pitch * canvas.h);
@@ -1176,6 +1178,7 @@ mod tests {
             write_png(&dir.join("hud_advanced.png"), &adv);
             write_png(&dir.join("menu_overlay.png"), &menu_ov);
             write_png(&dir.join("menu_lighting.png"), &menu_lt);
+            write_png(&dir.join("menu_pacing.png"), &menu_pc);
             write_png(&dir.join("menu_lab.png"), &menu_lb);
         }
     }

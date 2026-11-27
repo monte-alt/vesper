@@ -20,6 +20,7 @@ use super::{
 pub(super) enum MenuTab {
     Overlay,
     Lighting,
+    Pacing,
     Lab,
 }
 
@@ -30,6 +31,9 @@ enum ActiveSlider {
     AmbientAir,
     AmbientReflect,
     AmbientShade,
+    TexStageMs,
+    TexStageMb,
+    RamFloorGb,
     MouseSens,
 }
 
@@ -97,6 +101,7 @@ impl MenuState {
         match self.tab {
             MenuTab::Overlay => 6,
             MenuTab::Lighting => 7,
+            MenuTab::Pacing => 6,
             MenuTab::Lab => 6,
         }
     }
@@ -154,7 +159,8 @@ impl MenuState {
         if tab_k && !self.was_tab {
             self.tab = match self.tab {
                 MenuTab::Overlay => MenuTab::Lighting,
-                MenuTab::Lighting => MenuTab::Lab,
+                MenuTab::Lighting => MenuTab::Pacing,
+                MenuTab::Pacing => MenuTab::Lab,
                 MenuTab::Lab => MenuTab::Overlay,
             };
             self.focus_row = 0;
@@ -285,6 +291,27 @@ impl MenuState {
             }
             (MenuTab::Lighting, 6) => crate::ambient::reset_live(),
 
+            (MenuTab::Pacing, 0) => {
+                let idx = pacing_preset_idx() as i32;
+                apply_pacing_preset(((idx + dir).rem_euclid(3)) as usize);
+            }
+            (MenuTab::Pacing, 1) => {
+                let cur = crate::live_controls::tex_stage_ms() as i32;
+                crate::live_controls::set_tex_stage_ms((cur + dir * 2).clamp(4, 250) as u64);
+            }
+            (MenuTab::Pacing, 2) => {
+                let cur = crate::live_controls::tex_stage_mb() as i32;
+                crate::live_controls::set_tex_stage_mb((cur + dir * 8).clamp(0, 256) as u64);
+            }
+            (MenuTab::Pacing, 3) => {
+                crate::live_controls::set_tex_catchup(!crate::live_controls::tex_catchup());
+            }
+            (MenuTab::Pacing, 4) => {
+                let cur = crate::live_controls::pressure_free_mb() as i32;
+                crate::live_controls::set_pressure_free_mb((cur + dir * 256).clamp(1536, 4096) as u64);
+            }
+            (MenuTab::Pacing, 5) => crate::live_controls::reset_pacing_defaults(),
+
             (MenuTab::Lab, 0) => crate::live_controls::set_tearing_enabled(!crate::live_controls::tearing_enabled()),
             (MenuTab::Lab, 1) => crate::live_controls::set_kbm_enabled(!crate::live_controls::kbm_enabled()),
             (MenuTab::Lab, 2) => {
@@ -311,7 +338,7 @@ impl MenuState {
             return true;
         }
         // Tabs
-        for (i, tab) in [MenuTab::Overlay, MenuTab::Lighting, MenuTab::Lab].iter().enumerate() {
+        for (i, tab) in [MenuTab::Overlay, MenuTab::Lighting, MenuTab::Pacing, MenuTab::Lab].iter().enumerate() {
             let r = tab_rect(i);
             if r.contains(lx, ly) {
                 self.tab = *tab;
@@ -392,6 +419,54 @@ impl MenuState {
                     return true;
                 }
             }
+            MenuTab::Pacing => {
+                if let Some(idx) = hit_seg(lx, ly, row_y(0), 3) {
+                    apply_pacing_preset(idx);
+                    self.focus_row = 0;
+                    return true;
+                }
+                let sliders = [
+                    (1, ActiveSlider::TexStageMs, 4.0f32, 250.0f32, 2.0f32, crate::live_controls::tex_stage_ms() as f32),
+                    (2, ActiveSlider::TexStageMb, 0.0, 256.0, 8.0, crate::live_controls::tex_stage_mb() as f32),
+                    (
+                        4,
+                        ActiveSlider::RamFloorGb,
+                        1.5,
+                        4.0,
+                        0.25,
+                        crate::live_controls::pressure_free_mb() as f32 / 1024.0,
+                    ),
+                ];
+                for &(row, id, min, max, step, cur) in &sliders {
+                    let y = row_y(row);
+                    if slider_minus_rect(y).contains(lx, ly) {
+                        set_slider_val(id, (cur - step).clamp(min, max));
+                        self.focus_row = row;
+                        return true;
+                    }
+                    if slider_plus_rect(y).contains(lx, ly) {
+                        set_slider_val(id, (cur + step).clamp(min, max));
+                        self.focus_row = row;
+                        return true;
+                    }
+                    if slider_track_hit_rect(y).contains(lx, ly) {
+                        self.active_slider = Some(id);
+                        self.focus_row = row;
+                        apply_slider_drag(id, lx);
+                        return true;
+                    }
+                }
+                if toggle_rect(row_y(3)).contains(lx, ly) {
+                    crate::live_controls::set_tex_catchup(!crate::live_controls::tex_catchup());
+                    self.focus_row = 3;
+                    return true;
+                }
+                if reset_btn_rect(row_y(5)).contains(lx, ly) {
+                    crate::live_controls::reset_pacing_defaults();
+                    self.focus_row = 5;
+                    return true;
+                }
+            }
             MenuTab::Lab => {
                 if toggle_rect(row_y(0)).contains(lx, ly) {
                     crate::live_controls::set_tearing_enabled(!crate::live_controls::tearing_enabled());
@@ -444,6 +519,41 @@ impl MenuState {
     }
 }
 
+fn pacing_preset_idx() -> usize {
+    let ms = crate::live_controls::tex_stage_ms();
+    let catchup = crate::live_controls::tex_catchup();
+    if !catchup && ms <= 10 {
+        0
+    } else if !catchup && ms <= 24 {
+        1
+    } else {
+        2
+    }
+}
+
+fn apply_pacing_preset(idx: usize) {
+    match idx {
+        0 => {
+            crate::live_controls::set_tex_stage_ms(8);
+            crate::live_controls::set_tex_stage_mb(32);
+            crate::live_controls::set_tex_catchup(false);
+            crate::live_controls::set_pressure_free_mb(2816);
+        }
+        1 => {
+            crate::live_controls::set_tex_stage_ms(14);
+            crate::live_controls::set_tex_stage_mb(48);
+            crate::live_controls::set_tex_catchup(false);
+            crate::live_controls::set_pressure_free_mb(2560);
+        }
+        _ => {
+            crate::live_controls::set_tex_stage_ms(250);
+            crate::live_controls::set_tex_stage_mb(0);
+            crate::live_controls::set_tex_catchup(true);
+            crate::live_controls::set_pressure_free_mb(1536);
+        }
+    }
+}
+
 fn slider_spec(id: ActiveSlider) -> (f32, f32) {
     match id {
         ActiveSlider::AmbientLevel => (0.0, 2.0),
@@ -451,6 +561,9 @@ fn slider_spec(id: ActiveSlider) -> (f32, f32) {
         ActiveSlider::AmbientAir => (0.0, 1.5),
         ActiveSlider::AmbientReflect => (0.0, 3.0),
         ActiveSlider::AmbientShade => (0.0, 2.5),
+        ActiveSlider::TexStageMs => (4.0, 250.0),
+        ActiveSlider::TexStageMb => (0.0, 256.0),
+        ActiveSlider::RamFloorGb => (1.5, 4.0),
         ActiveSlider::MouseSens => (0.2, 3.0),
     }
 }
@@ -462,6 +575,15 @@ fn set_slider_val(id: ActiveSlider, val: f32) {
         ActiveSlider::AmbientAir => crate::ambient::set_live_air(val),
         ActiveSlider::AmbientReflect => crate::ambient::set_live_reflect(val),
         ActiveSlider::AmbientShade => crate::ambient::set_live_shade(val),
+        ActiveSlider::TexStageMs => crate::live_controls::set_tex_stage_ms(val.round().clamp(4.0, 250.0) as u64),
+        ActiveSlider::TexStageMb => {
+            let mb = val.round().clamp(0.0, 256.0) as u64;
+            crate::live_controls::set_tex_stage_mb(if mb < 4 { 0 } else { mb.clamp(8, 256) });
+        }
+        ActiveSlider::RamFloorGb => {
+            let mib = (val * 1024.0).round().clamp(1536.0, 4096.0) as u64;
+            crate::live_controls::set_pressure_free_mb(mib);
+        }
         ActiveSlider::MouseSens => crate::live_controls::set_mouse_sens(val),
     }
 }
@@ -471,13 +593,18 @@ fn apply_slider_drag(id: ActiveSlider, lx: i32) -> bool {
     let track = slider_track_rect(0);
     let t = ((lx - track.x as i32) as f32 / track.w as f32).clamp(0.0, 1.0);
     let raw = min + (max - min) * t;
-    let stepped = (raw * 100.0).round() / 100.0;
+    let stepped = match id {
+        ActiveSlider::TexStageMs => (raw / 2.0).round() * 2.0,
+        ActiveSlider::TexStageMb => (raw / 8.0).round() * 8.0,
+        ActiveSlider::RamFloorGb => (raw * 4.0).round() / 4.0,
+        _ => (raw * 100.0).round() / 100.0,
+    };
     set_slider_val(id, stepped.clamp(min, max));
     true
 }
 
 const fn tab_rect(i: usize) -> Rect {
-    Rect::new(18 + i as u32 * 164, 56, 156, 26)
+    Rect::new(18 + i as u32 * 122, 56, 116, 26)
 }
 
 const fn row_y(row: usize) -> u32 {
@@ -596,7 +723,12 @@ pub(super) fn paint_menu(menu: &MenuState, hud: &HudSettings, snap: Option<&Snap
     c.text(close_r.x + 9, close_r.y + 8, 1, if close_hot { CORAL } else { WHITE }, "X");
 
     // Tab strip
-    let tabs = [(MenuTab::Overlay, "Overlay"), (MenuTab::Lighting, "Lighting"), (MenuTab::Lab, "Controls & Lab")];
+    let tabs = [
+        (MenuTab::Overlay, "Overlay"),
+        (MenuTab::Lighting, "Lighting"),
+        (MenuTab::Pacing, "Pacing"),
+        (MenuTab::Lab, "Controls"),
+    ];
     for (i, &(tab, lbl)) in tabs.iter().enumerate() {
         let r = tab_rect(i);
         let active = menu.tab == tab;
@@ -680,6 +812,59 @@ pub(super) fn paint_menu(menu: &MenuState, hud: &HudSettings, snap: Option<&Snap
 
             draw_row_bg(&mut c, 6, menu.focus_row == 6, "Lighting Defaults", "Restore calibrated startup values");
             draw_action_button(&mut c, row_y(6), "Reset Lighting Defaults", menu.hover_pt);
+        }
+        MenuTab::Pacing => {
+            draw_row_bg(&mut c, 0, menu.focus_row == 0, "Pacing Preset", "Instant anti-stutter tuning");
+            draw_segmented(&mut c, row_y(0), &["Ultra 8ms", "Smooth 14ms", "Stock"], pacing_preset_idx(), menu.hover_pt);
+
+            let stage_ms = crate::live_controls::tex_stage_ms();
+            let ms_lbl = format!("{stage_ms}ms");
+            draw_row_bg(&mut c, 1, menu.focus_row == 1, "Tex Stage Cap", "Max CPU ms/frame for textures");
+            draw_slider_fmt(
+                &mut c,
+                row_y(1),
+                (stage_ms as f32).clamp(4.0, 250.0),
+                4.0,
+                250.0,
+                &ms_lbl,
+                menu.hover_pt,
+                menu.active_slider == Some(ActiveSlider::TexStageMs),
+            );
+
+            let stage_mb = crate::live_controls::tex_stage_mb();
+            let mb_lbl = if stage_mb == 0 { String::from("Auto") } else { format!("{stage_mb}MB") };
+            draw_row_bg(&mut c, 2, menu.focus_row == 2, "Tex Budget/Frame", "MB/frame ceiling (0 = Auto)");
+            draw_slider_fmt(
+                &mut c,
+                row_y(2),
+                (stage_mb as f32).clamp(0.0, 256.0),
+                0.0,
+                256.0,
+                &mb_lbl,
+                menu.hover_pt,
+                menu.active_slider == Some(ActiveSlider::TexStageMb),
+            );
+
+            let catchup = crate::live_controls::tex_catchup();
+            draw_row_bg(&mut c, 3, menu.focus_row == 3, "Backlog 3x Catchup", "Off prevents 750ms upload stalls");
+            draw_toggle(&mut c, row_y(3), catchup, menu.hover_pt);
+
+            let floor_gb = crate::live_controls::pressure_free_mb() as f32 / 1024.0;
+            let gb_lbl = format!("{floor_gb:.2}GB");
+            draw_row_bg(&mut c, 4, menu.focus_row == 4, "RAM Trim Floor", "Free RAM threshold before swap");
+            draw_slider_fmt(
+                &mut c,
+                row_y(4),
+                floor_gb.clamp(1.5, 4.0),
+                1.5,
+                4.0,
+                &gb_lbl,
+                menu.hover_pt,
+                menu.active_slider == Some(ActiveSlider::RamFloorGb),
+            );
+
+            draw_row_bg(&mut c, 5, menu.focus_row == 5, "Pacing Defaults", "Restore startup pacing switches");
+            draw_action_button(&mut c, row_y(5), "Reset Pacing Defaults", menu.hover_pt);
         }
         MenuTab::Lab => {
             let tearing = crate::live_controls::tearing_enabled();
@@ -774,6 +959,21 @@ fn draw_safety_toggle(c: &mut Canvas, y: u32, safe_on: bool, hover: Option<(i32,
 }
 
 fn draw_slider(c: &mut Canvas, y: u32, val: f32, min: f32, max: f32, hover: Option<(i32, i32)>, dragging: bool) {
+    let vstr = format!("{val:.2}");
+    draw_slider_fmt(c, y, val, min, max, &vstr, hover, dragging);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_slider_fmt(
+    c: &mut Canvas,
+    y: u32,
+    val: f32,
+    min: f32,
+    max: f32,
+    vstr: &str,
+    hover: Option<(i32, i32)>,
+    dragging: bool,
+) {
     let minus = slider_minus_rect(y);
     let plus = slider_plus_rect(y);
     let track = slider_track_rect(y);
@@ -794,11 +994,10 @@ fn draw_slider(c: &mut Canvas, y: u32, val: f32, min: f32, max: f32, hover: Opti
     c.circle_aa(thumb_x, thumb_y, if dragging { 7.0 } else { 5.8 }, WHITE, 1.0);
     c.circle_aa(thumb_x, thumb_y, 3.0, VIOLET, 1.0);
 
-    let vstr = format!("{val:.2}");
-    c.rounded_rect_fill(446, y + 7, 48, 24, 5.0, [16, 21, 38], 1.0);
-    c.rounded_rect_stroke(446, y + 7, 48, 24, 5.0, WELL_BORDER, 1.0);
-    let vw = text_width(&vstr, 1);
-    c.text(446 + (48u32.saturating_sub(vw)) / 2, y + 15, 1, CYAN, &vstr);
+    c.rounded_rect_fill(444, y + 7, 50, 24, 5.0, [16, 21, 38], 1.0);
+    c.rounded_rect_stroke(444, y + 7, 50, 24, 5.0, WELL_BORDER, 1.0);
+    let vw = text_width(vstr, 1);
+    c.text(444 + (50u32.saturating_sub(vw)) / 2, y + 15, 1, CYAN, vstr);
 }
 
 fn draw_action_button(c: &mut Canvas, y: u32, label: &str, hover: Option<(i32, i32)>) {

@@ -2862,16 +2862,26 @@ impl HostHeap {
     ///
     /// [`dynamic`]: HostHeap::dynamic
     pub(crate) fn release(&self, first: u32, n: u32) {
-        let Some(at) = first.checked_sub(self.count) else {
-            return;
-        };
+        self.release_many([(first, n)]);
+    }
+
+    /// Gives back every `(first, n)` dynamic slot range under a single heap lock.
+    pub(crate) fn release_many(&self, ranges: impl IntoIterator<Item = (u32, u32)>) {
         let mut guard = self.next.lock().unwrap_or_else(|e| e.into_inner());
-        let end = (at + n).min(self.dynamic) as usize;
-        if let Some(slots) = guard.1.get_mut(at as usize..end) {
-            let given = slots.iter().filter(|taken| **taken).count() as u32;
-            self.free.fetch_add(given, std::sync::atomic::Ordering::Relaxed);
+        let mut total_given = 0u32;
+        for (first, n) in ranges {
+            let Some(at) = first.checked_sub(self.count) else {
+                continue;
+            };
+            let end = (at.saturating_add(n)).min(self.dynamic) as usize;
+            if let Some(slots) = guard.1.get_mut(at as usize..end) {
+                total_given = total_given.saturating_add(slots.iter().filter(|taken| **taken).count() as u32);
+                slots.fill(false);
+            }
+        }
+        if total_given != 0 {
+            self.free.fetch_add(total_given, std::sync::atomic::Ordering::Relaxed);
             self.too_long.store(u32::MAX, std::sync::atomic::Ordering::Relaxed);
-            slots.fill(false);
         }
     }
 

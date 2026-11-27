@@ -1580,7 +1580,7 @@ impl Claims {
             while !BUSY.try_set(block) {
                 tries += 1;
                 spun += 1;
-                if tries < 64 {
+                if tries < 16 {
                     std::hint::spin_loop();
                 } else {
                     // Another thread's `VirtualProtect` of the block.
@@ -3368,7 +3368,7 @@ pub fn title_memory_written(at: usize, len: usize, pages: bool) {
             return;
         }
     }
-    {
+    if PROTECTED.any(at / BLOCK, end.div_ceil(BLOCK)) {
         let g = guards();
         let guarded = g.protected.range(at / BLOCK..end.div_ceil(BLOCK)).count() as u64;
         if pages {
@@ -3689,8 +3689,18 @@ pub fn title_memory_freed(at: usize, len: usize) {
     } else if VIEWS.any(at / BLOCK, at / BLOCK + 1) {
         forget_views(at / BLOCK, allocation_end(at, at).div_ceil(BLOCK).max(at / BLOCK + 1));
     }
-    let mut g = guards();
     let first = at / BLOCK;
+    if len != 0 {
+        let range_end = at.saturating_add(len).div_ceil(BLOCK);
+        let gs = guards_shared();
+        let any_noted = gs.protected.range(first..range_end).next().is_some()
+            || gs.absent.range(first..range_end).next().is_some()
+            || gs.foreign.range(first..range_end).next().is_some();
+        if !any_noted {
+            return;
+        }
+    }
+    let mut g = guards();
     let noted = [g.protected.range(first..).next(), g.absent.range(first..).next(), g.foreign.range(first..).next().copied()];
     let Some(noted) = noted.into_iter().flatten().min() else {
         return;

@@ -558,7 +558,8 @@ impl State {
     /// slots out, and up to 4,900 draws a frame went without their tables.
     /// shortcut: a list the title runs a second time without a reset then
     /// reads slots others may have taken (logged once).
-    pub(crate) fn tables_done(&mut self) {
+    /// Drains dynamic descriptor table ranges into `out` and marks the list done.
+    pub(crate) fn drain_tables_into(&mut self, out: &mut Vec<(u64, u32, u32)>) {
         if self.tables_gone && self.dynamic.is_empty() {
             return;
         }
@@ -566,14 +567,18 @@ impl State {
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| tracing::warn!("a list ran again after its descriptor tables were given back"));
         }
-        for (heap, first, n) in self.dynamic.drain(..) {
-            crate::descriptor::release_dynamic(heap, first, n);
-        }
+        out.append(&mut self.dynamic);
         self.fresh_tables.clear();
         self.recording = 0;
         self.root_srv_slots.clear();
         self.root_uav_slots.clear();
         self.tables_gone = true;
+    }
+
+    pub(crate) fn tables_done(&mut self) {
+        let mut batch = Vec::new();
+        self.drain_tables_into(&mut batch);
+        crate::descriptor::release_dynamic_batch(&batch);
     }
 }
 
@@ -2509,19 +2514,12 @@ impl State {
             user_data: 0,
             slot: 0,
         };
-        // Also within a time per pass: the pass runs on a thread that
-        // records the frame, and making and staging 192 MB of textures took
-        // 1.6-2.2 s of each of the world's first twenty frames (run 20).
-        // The rest waits for the next frames, as it does past the bytes.
-        static SPAN_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-        let span = std::time::Duration::from_millis(*SPAN_MS.get_or_init(|| {
-            std::env::var("VESPER_TEXTURE_STAGE_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(250)
-        }));
-        // A backlog (a scene's first minutes: 22,000 slots due, 2-3 minutes of black
-        // surfaces at 192 MB a frame) gets three times the bytes and the time until it
-        // drains; `VESPER_TEXTURE_CATCHUP=0` keeps the plain budget.
-        static CATCHUP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let catchup = *CATCHUP.get_or_init(|| std::env::var_os("VESPER_TEXTURE_CATCHUP").is_none_or(|v| v != "0"));
+        // Also within a time and byte budget per pass so streaming bursts stay paced
+        // across frames instead of stalling one frame for hundreds of milliseconds.
+        let cap_mb = crate::live_controls::tex_stage_mb();
+        let per_frame = if cap_mb > 0 { per_frame.min(cap_mb << 20) } else { per_frame };
+        let span = std::time::Duration::from_millis(crate::live_controls::tex_stage_ms());
+        let catchup = crate::live_controls::tex_catchup();
         let (per_frame, span) = if catchup && on_time >= 1024 { (per_frame * 3, span * 3) } else { (per_frame, span) };
         // A run made early (`State::early_textures`) has a budget of its
         // own: its bytes on top of what the frame has spent so far.
@@ -2539,13 +2537,11 @@ impl State {
         let bytes_at_most = if required || asked.is_some() {
             bytes_at_most
         } else {
-            // Only enforce the 64 MiB pressure throttle when staging memory is
-            // actually accumulating or headroom is below the OS reserve floor;
-            // on 32 GiB hosts with physical standby cache pressure and tiny
-            // live staging (< 256 MiB), allow 192 MiB/frame so world textures
-            // sharpen instead of stalling for 30+ seconds.
+            // Enforce the 64 MiB pressure throttle promptly once physical RAM
+            // hits the configured floor and live staging reaches 64 MiB (or
+            // commit hits the critical reserve floor) to prevent Windows paging stalls.
             let pressure = crate::residency::pressured()
-                && (crate::texture::live_staging_bytes() >= (256 << 20)
+                && (crate::texture::live_staging_bytes() >= (64 << 20)
                     || crate::residency::critical_commit());
             crate::residency::prefetch_limit(
                 bytes_at_most,

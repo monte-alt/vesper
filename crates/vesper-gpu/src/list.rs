@@ -210,6 +210,10 @@ impl Detached {
     pub(crate) fn release_tables(&mut self) {
         self._state.tables_done();
     }
+
+    pub(crate) fn drain_tables_into(&mut self, out: &mut Vec<(u64, u32, u32)>) {
+        self._state.drain_tables_into(out);
+    }
 }
 
 /// A host list that has run and waits to be used again, and the bytes of

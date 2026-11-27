@@ -894,6 +894,31 @@ pub(crate) fn release_dynamic(id: u64, first: u32, n: u32) {
     }
 }
 
+/// Gives back a batch of `(heap_id, first, n)` dynamic slot ranges, taking
+/// `SHADER_HEAPS` once and each host heap lock once per contiguous run.
+#[cfg(windows)]
+pub(crate) fn release_dynamic_batch(items: &[(u64, u32, u32)]) {
+    if items.is_empty() {
+        return;
+    }
+    let heaps = SHADER_HEAPS.read().unwrap_or_else(|e| e.into_inner());
+    let mut start = 0;
+    while start < items.len() {
+        let id = items[start].0;
+        let mut end = start + 1;
+        while end < items.len() && items[end].0 == id {
+            end += 1;
+        }
+        if let Some(entry) = heaps.iter().find(|h| h.id == id)
+            // SAFETY: registered heaps are live (removed when dropped).
+            && let Some(Some(host)) = unsafe { &*(entry.ptr as *const Heap) }.host.get()
+        {
+            host.release_many(items[start..end].iter().map(|&(_, first, n)| (first, n)));
+        }
+        start = end;
+    }
+}
+
 /// Runs `f` with the host heap of the title's largest view heap, if there is
 /// one (nothing is waited for).
 #[cfg(windows)]
@@ -2226,6 +2251,13 @@ mod tests {
         release_dynamic(id_b, all, 1);
         assert_eq!(host_b.free_dynamic(), 1);
         assert_eq!(host_b.dynamic(1), Some(all));
+
+        // Batched release across mixed valid/stale ids frees multiple ranges cleanly.
+        let extra = u32::from(count > 1);
+        release_dynamic_batch(&[(id_a, all, 1), (id_b, all, 1), (id_b, all + 1, extra)]);
+        assert_eq!(host_b.free_dynamic(), 1 + extra);
+        assert_eq!(host_b.dynamic(1 + extra), Some(all));
+
         let _ = slot_a;
         assert_eq!(release(raw_b), 0);
     }
