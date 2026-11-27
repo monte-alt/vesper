@@ -46,6 +46,12 @@ pub(crate) static STATS: [std::sync::atomic::AtomicU64; 2] = [const { std::sync:
 
 /// Since the last frame-rate line: enhanced barrier groups `[skipped, enhanced_requested, legacy_uav, coalesced]`.
 pub(crate) static GROUP_STATS: [std::sync::atomic::AtomicU64; 4] = [const { std::sync::atomic::AtomicU64::new(0) }; 4];
+static LAST_COALESCED_X10: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Coalesced enhanced barriers per frame from the most recent logging window.
+pub(crate) fn last_coalesced() -> f32 {
+    LAST_COALESCED_X10.load(Relaxed) as f32 / 10.0
+}
 
 pub(crate) struct Rec {
     list: ID3D12GraphicsCommandList,
@@ -233,6 +239,7 @@ impl std::ops::Deref for Rec {
 pub(crate) fn line(frames: f64) {
     let [asked, made] = [0, 1].map(|i| STATS[i].swap(0, Relaxed) as f64 / frames);
     let [skipped, enhanced, legacy, coalesced] = [0, 1, 2, 3].map(|i| GROUP_STATS[i].swap(0, Relaxed) as f64 / frames);
+    LAST_COALESCED_X10.store((coalesced * 10.0).round() as u64, Relaxed);
     if asked > 0.0 || skipped + enhanced + legacy > 0.0 {
         tracing::info!(
             "barrier calls per frame (VESPER_COALESCE_BARRIERS): {asked:.0} asked for, {made:.0} made of them; enhanced barrier groups (VESPER_SMART_BARRIERS): {skipped:.0} skipped, {enhanced:.0} global ({coalesced:.0} coalesced), {legacy:.0} legacy uav"

@@ -116,13 +116,51 @@ fn parse(set: &str) -> Set {
     }
 }
 
-fn set() -> Set {
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct AmbientLive {
+    pub(crate) enabled: bool,
+    pub(crate) level: f32,
+    pub(crate) floor: f32,
+    pub(crate) air: f32,
+    pub(crate) reflect: f32,
+    pub(crate) shade: f32,
+}
+
+fn initial_set() -> Set {
     static SET: OnceLock<Set> = OnceLock::new();
     *SET.get_or_init(|| match parse(&std::env::var("VESPER_AMBIENT").unwrap_or_default()) {
         // With the RT band asked for and no share, use the band's level.
         Set::Off => rt_band().map_or(Set::Off, |b| Set::Estimate(b.level)),
         set => set,
     })
+}
+
+fn live_enabled_cell() -> &'static std::sync::atomic::AtomicBool {
+    static CELL: OnceLock<std::sync::atomic::AtomicBool> = OnceLock::new();
+    CELL.get_or_init(|| std::sync::atomic::AtomicBool::new(initial_set() != Set::Off))
+}
+
+fn live_level_cell() -> &'static std::sync::atomic::AtomicU32 {
+    static CELL: OnceLock<std::sync::atomic::AtomicU32> = OnceLock::new();
+    CELL.get_or_init(|| {
+        let lvl = match initial_set() {
+            Set::Off => 0.8,
+            Set::Estimate(v) | Set::Constant(v) => v,
+        };
+        std::sync::atomic::AtomicU32::new(lvl.to_bits())
+    })
+}
+
+fn set() -> Set {
+    use std::sync::atomic::Ordering::Relaxed;
+    if !live_enabled_cell().load(Relaxed) {
+        return Set::Off;
+    }
+    let level = f32::from_bits(live_level_cell().load(Relaxed)).clamp(0.0, 2.5);
+    match initial_set() {
+        Set::Constant(_) => Set::Constant(level),
+        _ => Set::Estimate(level),
+    }
 }
 
 /// With ray tracing (`VESPER_AMBIENT_RT=<least>,<most>[,<level>]`; unset:
@@ -172,9 +210,7 @@ fn bounds() -> (f32, f32) {
     }
 }
 
-/// The most the air scatters, as a multiple of the light around
-/// (`VESPER_AMBIENT_AIR=<multiple>`; unset or 0: what the title has).
-fn air() -> f32 {
+fn initial_air() -> f32 {
     static SET: OnceLock<f32> = OnceLock::new();
     *SET.get_or_init(|| {
         let set = std::env::var("VESPER_AMBIENT_AIR").unwrap_or_default();
@@ -182,15 +218,22 @@ fn air() -> f32 {
     })
 }
 
-/// The most a reflection may hold, as a multiple of the light around
-/// (`VESPER_AMBIENT_REFLECT=<multiple>`; `0` or `off`: the title's own).
-/// Unset: [`REFLECT`]. Like the rest of the stand-in it acts only while
-/// `VESPER_AMBIENT` is set and the builder does not run.
-fn reflect() -> f32 {
+fn live_air_cell() -> &'static std::sync::atomic::AtomicU32 {
+    static CELL: OnceLock<std::sync::atomic::AtomicU32> = OnceLock::new();
+    CELL.get_or_init(|| std::sync::atomic::AtomicU32::new(initial_air().to_bits()))
+}
+
+/// The most the air scatters, as a multiple of the light around
+/// (`VESPER_AMBIENT_AIR=<multiple>`; unset or 0: what the title has).
+fn air() -> f32 {
+    f32::from_bits(live_air_cell().load(std::sync::atomic::Ordering::Relaxed)).clamp(0.0, 2.0)
+}
+
+fn initial_reflect() -> f32 {
     static SET: OnceLock<f32> = OnceLock::new();
     *SET.get_or_init(|| {
         let held = std::env::var("VESPER_AMBIENT_REFLECT").map_or(REFLECT, |v| parse_reflect(&v));
-        if held > 0.0 && set() != Set::Off {
+        if held > 0.0 && initial_set() != Set::Off {
             tracing::info!(
                 held,
                 "reflections held to a multiple of the light around (VESPER_AMBIENT_REFLECT)"
@@ -198,6 +241,19 @@ fn reflect() -> f32 {
         }
         held
     })
+}
+
+fn live_reflect_cell() -> &'static std::sync::atomic::AtomicU32 {
+    static CELL: OnceLock<std::sync::atomic::AtomicU32> = OnceLock::new();
+    CELL.get_or_init(|| std::sync::atomic::AtomicU32::new(initial_reflect().to_bits()))
+}
+
+/// The most a reflection may hold, as a multiple of the light around
+/// (`VESPER_AMBIENT_REFLECT=<multiple>`; `0` or `off`: the title's own).
+/// Unset: [`REFLECT`]. Like the rest of the stand-in it acts only while
+/// `VESPER_AMBIENT` is set and the builder does not run.
+fn reflect() -> f32 {
+    f32::from_bits(live_reflect_cell().load(std::sync::atomic::Ordering::Relaxed)).clamp(0.0, 4.0)
 }
 
 /// The multiple when the switch is unset.
@@ -285,8 +341,7 @@ fn frame_ms(role: Role) -> f32 {
     dt
 }
 
-/// Strength and radius of the creases' shade.
-fn shade() -> [f32; 2] {
+fn initial_shade() -> [f32; 2] {
     static SET: OnceLock<[f32; 2]> = OnceLock::new();
     *SET.get_or_init(|| {
         let mut shade = [1.0, 0.6];
@@ -300,9 +355,20 @@ fn shade() -> [f32; 2] {
     })
 }
 
-/// Minimum indirect ambient floor for dark interiors without RT
-/// (`VESPER_AMBIENT_FLOOR`, default `0.0`).
-fn floor() -> f32 {
+fn live_shade_strength_cell() -> &'static std::sync::atomic::AtomicU32 {
+    static CELL: OnceLock<std::sync::atomic::AtomicU32> = OnceLock::new();
+    CELL.get_or_init(|| std::sync::atomic::AtomicU32::new(initial_shade()[0].to_bits()))
+}
+
+/// Strength and radius of the creases' shade.
+fn shade() -> [f32; 2] {
+    let base = initial_shade();
+    let strength = f32::from_bits(live_shade_strength_cell().load(std::sync::atomic::Ordering::Relaxed))
+        .clamp(0.0, 3.0);
+    [strength, base[1]]
+}
+
+fn initial_floor() -> f32 {
     static FLOOR: OnceLock<f32> = OnceLock::new();
     *FLOOR.get_or_init(|| {
         std::env::var("VESPER_AMBIENT_FLOOR")
@@ -312,6 +378,66 @@ fn floor() -> f32 {
             .unwrap_or(0.0)
             .clamp(0.0, 2.0)
     })
+}
+
+fn live_floor_cell() -> &'static std::sync::atomic::AtomicU32 {
+    static CELL: OnceLock<std::sync::atomic::AtomicU32> = OnceLock::new();
+    CELL.get_or_init(|| std::sync::atomic::AtomicU32::new(initial_floor().to_bits()))
+}
+
+/// Minimum indirect ambient floor for dark interiors without RT
+/// (`VESPER_AMBIENT_FLOOR`, default `0.0`).
+fn floor() -> f32 {
+    f32::from_bits(live_floor_cell().load(std::sync::atomic::Ordering::Relaxed)).clamp(0.0, 2.0)
+}
+
+pub(crate) fn live_state() -> AmbientLive {
+    use std::sync::atomic::Ordering::Relaxed;
+    AmbientLive {
+        enabled: live_enabled_cell().load(Relaxed),
+        level: f32::from_bits(live_level_cell().load(Relaxed)),
+        floor: floor(),
+        air: air(),
+        reflect: reflect(),
+        shade: shade()[0],
+    }
+}
+
+pub(crate) fn set_live_enabled(enabled: bool) {
+    live_enabled_cell().store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn set_live_level(v: f32) {
+    live_level_cell().store(v.clamp(0.0, 2.5).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn set_live_floor(v: f32) {
+    live_floor_cell().store(v.clamp(0.0, 2.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn set_live_air(v: f32) {
+    live_air_cell().store(v.clamp(0.0, 2.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn set_live_reflect(v: f32) {
+    live_reflect_cell().store(v.clamp(0.0, 4.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn set_live_shade(v: f32) {
+    live_shade_strength_cell().store(v.clamp(0.0, 3.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn reset_live() {
+    set_live_enabled(initial_set() != Set::Off);
+    let lvl = match initial_set() {
+        Set::Off => 0.8,
+        Set::Estimate(v) | Set::Constant(v) => v,
+    };
+    set_live_level(lvl);
+    set_live_floor(initial_floor());
+    set_live_air(initial_air());
+    set_live_reflect(initial_reflect());
+    set_live_shade(initial_shade()[0]);
 }
 
 const SOURCE: &str = r#"

@@ -127,6 +127,21 @@ unsafe impl Sync for MappedView {}
 
 static REGIONS: Mutex<Vec<Region>> = Mutex::new(Vec::new());
 static HOT_BYTES: AtomicU64 = AtomicU64::new(0);
+static REGION_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TOTAL_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Non-blocking snapshot of `(region_count, total_mb)` for the telemetry HUD.
+pub(crate) fn live_stats() -> (usize, u64) {
+    if let Ok(regions) = REGIONS.try_lock() {
+        let count = regions.len();
+        let bytes: u64 = regions.iter().map(|r| r.end.saturating_sub(r.start)).sum();
+        REGION_COUNT.store(count, Ordering::Relaxed);
+        TOTAL_BYTES.store(bytes, Ordering::Relaxed);
+        (count, bytes >> 20)
+    } else {
+        (REGION_COUNT.load(Ordering::Relaxed), TOTAL_BYTES.load(Ordering::Relaxed) >> 20)
+    }
+}
 static ALIASES: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 static ALIAS_BOUNDS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 

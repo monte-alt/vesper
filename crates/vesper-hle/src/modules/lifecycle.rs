@@ -327,7 +327,7 @@ extern "system" fn window_proc(
     // when unlocked (`~` / `F2` / `Esc` / `P`).
     if message == wm::WM_SETCURSOR && (lparam as u32 & 0xFFFF) == wm::HTCLIENT {
         static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
-        if super::gameinput::cursor_locked() {
+        if super::gameinput::cursor_locked() && !vesper_gpu::live_controls::menu_open() {
             CURSOR_HIDDEN.store(true, Ordering::Relaxed);
             // SAFETY: hides the cursor only inside our client area on the UI thread.
             unsafe { wm::SetCursor(std::ptr::null_mut()) };

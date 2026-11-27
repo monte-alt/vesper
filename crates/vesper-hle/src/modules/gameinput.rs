@@ -129,6 +129,7 @@ pub(crate) fn cursor_locked() -> bool {
 
 /// Parses an opt-in boolean environment variable (`1`, `true`, `yes`, `on`,
 /// ignoring surrounding whitespace and ASCII case).
+#[cfg(test)]
 fn parse_env_flag(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -139,31 +140,29 @@ fn parse_env_flag(value: &str) -> bool {
 /// PC-style keyboard + mouse stand-in pad (`VESPER_KBM_PC=1`).
 /// Off by default so the existing keyboard table and tests stay unchanged.
 fn pc_kbm() -> bool {
-    static ENABLED: LazyLock<bool> =
-        LazyLock::new(|| std::env::var("VESPER_KBM_PC").is_ok_and(|v| parse_env_flag(&v)));
-    *ENABLED
+    #[cfg(test)]
+    {
+        static ENABLED: LazyLock<bool> =
+            LazyLock::new(|| std::env::var("VESPER_KBM_PC").is_ok_and(|v| parse_env_flag(&v)));
+        *ENABLED
+    }
+    #[cfg(not(test))]
+    {
+        vesper_gpu::live_controls::kbm_enabled()
+    }
 }
 
 /// Mouse-look sensitivity multiplier for `VESPER_KBM_PC=1`
 /// (`VESPER_MOUSE_SENS`, default `1.0`).
 #[cfg(windows)]
 fn mouse_sens() -> f32 {
-    static SENS: LazyLock<f32> = LazyLock::new(|| {
-        std::env::var("VESPER_MOUSE_SENS")
-            .ok()
-            .and_then(|s| s.trim().parse::<f32>().ok())
-            .filter(|v| v.is_finite() && *v > 0.0)
-            .unwrap_or(1.0)
-    });
-    *SENS
+    vesper_gpu::live_controls::mouse_sens()
 }
 
 /// Invert mouse Y axis for `VESPER_KBM_PC=1` (`VESPER_MOUSE_INVERT_Y=1`).
 #[cfg(windows)]
 fn mouse_invert_y() -> bool {
-    static INVERT: LazyLock<bool> =
-        LazyLock::new(|| std::env::var("VESPER_MOUSE_INVERT_Y").is_ok_and(|v| parse_env_flag(&v)));
-    *INVERT
+    vesper_gpu::live_controls::mouse_invert_y()
 }
 
 /// Exponentially smoothed mouse-delta to right-stick velocity converter.
@@ -1434,6 +1433,9 @@ mod host {
         }
 
         fn keys(&mut self) -> Vec<KeyState> {
+            if vesper_gpu::live_controls::menu_open() {
+                return Vec::new();
+            }
             let mut down = scripted();
             if focused() {
                 // Left/right modifier keys only, as devices report them; no
@@ -1467,8 +1469,8 @@ mod host {
         }
 
         fn mouse_pad(&mut self, active: bool) -> PadState {
-            if !pc_kbm() || !active {
-                self.disarm_mouse(foreground_window(), "stand-in inactive");
+            if !pc_kbm() || !active || vesper_gpu::live_controls::menu_open() {
+                self.disarm_mouse(foreground_window(), "menu or stand-in inactive");
                 return PadState::default();
             }
             let Some(hwnd) = foreground_window() else {
@@ -1481,9 +1483,8 @@ mod host {
                 unsafe { GetAsyncKeyState(vk) < 0 }
             };
 
-            // Toggle mouse-look lock with F2 (0x71, layout-independent) or
-            // VK_OEM_3 (0xC0, `` ` `` / `~` on US layouts).
-            let toggle_down = key_down(0x71) || key_down(0xC0);
+            // Toggle mouse-look lock with F2 (0x71); `~` (VK_OEM_3) opens the Vesper Menu.
+            let toggle_down = key_down(0x71);
             if toggle_down && !self.toggle_was_down {
                 let next = !self.mouse_locked;
                 self.set_mouse_locked(next, Some(hwnd));

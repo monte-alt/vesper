@@ -10390,13 +10390,17 @@ impl Host {
             #[cfg(feature = "diagnostics")]
             crate::replay::record::present(texture, state);
             let mut showing = crate::timeline::span("the host's Present");
-            let present_flags = if p.allow_tearing { DXGI_PRESENT_ALLOW_TEARING } else { DXGI_PRESENT(0) };
+            let present_flags = if p.allow_tearing && crate::live_controls::tearing_enabled() {
+                DXGI_PRESENT_ALLOW_TEARING
+            } else {
+                DXGI_PRESENT(0)
+            };
             let status = p.swap_chain.Present(0, present_flags);
             showing.next("the frame meter");
             if status == windows::Win32::Foundation::S_OK
                 || (meter_occluded() && status == windows::Win32::Foundation::DXGI_STATUS_OCCLUDED)
             {
-                p.panel.frame(p.meter.line_due());
+                p.panel.frame(p.hwnd.0 as isize, p.meter.line_due());
             }
             let presented = p.meter.record_present(p.hwnd, status);
             showing.end();

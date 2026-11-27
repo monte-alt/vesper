@@ -49,6 +49,7 @@ echo   [4] 1080p Series X + FSR 4.1.2 Quality          : Optional FidelityFX Ups
 echo   [5] 1440p Series X + RDNA 4 HW RT               : Experimental HW BVH4 DXR
 echo.
 echo   TIP: Enable AMD AFMF 2 in Adrenalin (or Lossless Scaling 2x) on [1] or [3].
+echo   HOTKEYS: ~ Vesper Menu  ^|  F3 Cycle HUD (Basic / Advanced / Off)  ^|  F2 Toggle Mouse Look
 echo.
 choice /C 12345 /N /T 5 /D 1 /M "Select launch mode [1-5] (auto-starts [1] in 5s): "
 set "MODE=%ERRORLEVEL%"
@@ -118,8 +119,9 @@ set "VESPER_AMBIENT_REFLECT=1.0"
 set "VESPER_AMBIENT_SETTLE=250,3,2.0"
 set "VESPER_AMBIENT_FLOOR=0.01"
 
-rem Optional PC keyboard + mouse mapping (remove "rem " on the next line to enable)
-rem set "VESPER_KBM_PC=1"
+rem Vesper HUD + interactive ~ Control Center Menu + PC keyboard & mouse mapping
+set "VESPER_PANEL=1"
+set "VESPER_KBM_PC=1"
 
 if "%MODE%"=="1" (
     set "CONSOLE=series-x"

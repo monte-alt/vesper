@@ -419,12 +419,28 @@ fn batches() -> u8 {
     })
 }
 
+fn indirect_clamp_cell() -> &'static std::sync::atomic::AtomicBool {
+    static ON: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+    ON.get_or_init(|| {
+        std::sync::atomic::AtomicBool::new(
+            std::env::var_os("VESPER_INDIRECT_CLAMP").is_none_or(|v| v != "0"),
+        )
+    })
+}
+
 /// Whether indirect draw/dispatch arguments are clamped on the GPU before
 /// `ExecuteIndirect` (`VESPER_INDIRECT_CLAMP=0` executes directly from the
 /// title's argument buffer, skipping clamp dispatches and scratch barriers).
 fn indirect_clamp() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VESPER_INDIRECT_CLAMP").is_none_or(|v| v != "0"))
+    indirect_clamp_cell().load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn live_indirect_clamp() -> bool {
+    indirect_clamp()
+}
+
+pub(crate) fn set_live_indirect_clamp(on: bool) {
+    indirect_clamp_cell().store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The records clamped by the pass opened last ([`batches`]).
