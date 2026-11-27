@@ -1,0 +1,33 @@
+name: Task Claim (VSP-XX)
+description: Claim an open optimization or feature task from ROADMAP.md before opening a PR.
+title: "[CLAIM] VSP-XX: <short summary>"
+labels: ["task-claim"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check `ROADMAP.md` first to confirm the task is **Open**. Only one active claim per contributor; claims release after 72h without progress.
+  - type: input
+    id: task_id
+    attributes:
+      label: Roadmap Task ID
+      description: Must match an open ID in ROADMAP.md (e.g., VSP-01)
+      placeholder: "VSP-01"
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Technical Plan & File Scope
+      description: List the exact crates/files you plan to touch and how you will benchmark/verify.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Contributor Rules
+      options:
+        - label: I confirmed no other open Task Claim holds this ID.
+          required: true
+        - label: I will include local clippy + xtask test results and real before/after benchmarks in my PR.
+          required: true

@@ -1,0 +1,30 @@
+name: Hardware Benchmark Report
+description: Share reproducible FPS, frame-time, VRAM, and RAM measurements on your GPU/CPU.
+title: "[BENCH] <GPU> - <Avg/Med FPS>"
+labels: ["benchmark"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do **not** upload proprietary assets, screenshots containing third-party artwork, or third-party studio/franchise names.
+  - type: input
+    id: specs
+    attributes:
+      label: System Specs (CPU / RAM / GPU / Driver / OS)
+      placeholder: "Ryzen 7 5800X3D / 32 GB / RX 9070 XT 16 GB / Adrenalin ... / Windows 11"
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Commit Hash & Launch Preset
+      placeholder: "main @ xxxxxxx, launch.cmd [1] 1080p NO-FSR"
+    validations:
+      required: true
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Measured Metrics & Notes
+      description: Include Avg FPS, Med FPS, Max FPS, p95 ms, GPU Busy %, Peak Private RAM, and Peak VRAM.
+    validations:
+      required: true

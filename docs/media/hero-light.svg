@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 240" width="1100" height="240" role="img" aria-label="Vesper DirectX 12 Compatibility Runtime">
+  <defs>
+    <linearGradient id="bgLight" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="60%" stop-color="#eef2ff"/>
+      <stop offset="100%" stop-color="#fff7ed"/>
+    </linearGradient>
+    <linearGradient id="accentVLight" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4f46e5"/>
+      <stop offset="55%" stop-color="#9333ea"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+    <linearGradient id="horizonLight" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4f46e5" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#9333ea" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#ea580c" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1100" height="240" rx="18" fill="url(#bgLight)" stroke="#cbd5e1" stroke-width="1.5"/>
+  <g opacity="0.22" stroke="#6366f1" stroke-width="1">
+    <line x1="0" y1="185" x2="1100" y2="185"/>
+    <line x1="720" y1="0" x2="1100" y2="240"/>
+    <line x1="840" y1="0" x2="1100" y2="165"/>
+  </g>
+  <rect x="44" y="184" width="1012" height="2" fill="url(#horizonLight)"/>
+  <g transform="translate(68, 52)">
+    <rect x="0" y="0" width="112" height="112" rx="24" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.5"/>
+    <polygon points="24,26 42,26 56,74 70,26 88,26 63,92 49,92" fill="url(#accentVLight)"/>
+    <polygon points="56,12 59,20 67,23 59,26 56,34 53,26 45,23 53,20" fill="#f59e0b"/>
+  </g>
+  <text x="208" y="108" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="54" font-weight="800" letter-spacing="8" fill="#0f172a">VESPER</text>
+  <text x="210" y="142" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="18" font-weight="500" fill="#475569">DirectX 12 Compatibility &amp; Renderer-Porting Runtime for Windows x64</text>
+  <g transform="translate(210, 198)" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="12" font-weight="600">
+    <rect x="0" y="-14" width="88" height="24" rx="12" fill="#e0e7ff" stroke="#a5b4fc"/>
+    <text x="44" y="2" text-anchor="middle" fill="#3730a3">Rust 2024</text>
+    <rect x="100" y="-14" width="166" height="24" rx="12" fill="#f3e8ff" stroke="#d8b4fe"/>
+    <text x="183" y="2" text-anchor="middle" fill="#6b21a8">DX12 Agility 1.614.1</text>
+    <rect x="278" y="-14" width="150" height="24" rx="12" fill="#ffedd5" stroke="#fdba74"/>
+    <text x="353" y="2" text-anchor="middle" fill="#9a3412">AMD RDNA 4 Tuned</text>
+    <rect x="440" y="-14" width="92" height="24" rx="12" fill="#d1fae5" stroke="#6ee7b7"/>
+    <text x="486" y="2" text-anchor="middle" fill="#065f46">GPL-3.0</text>
+  </g>
+</svg>

@@ -1,0 +1,38 @@
+[package]
+name = "vesper"
+description = "Command-line front end: inspect, census, convert, run."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+vesper-core.workspace = true
+vesper-pe.workspace = true
+vesper-loader.workspace = true
+vesper-hle.workspace = true
+vesper-shader = { workspace = true, features = ["host"] }
+vesper-game.workspace = true
+anyhow.workspace = true
+blake3.workspace = true
+memchr.workspace = true
+clap.workspace = true
+walkdir.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[features]
+# Debug-level logs and the debugging switches (frame capture, stack dumps,
+# the host debug layer, scripted keys). Off in a plain release build.
+diagnostics = [
+    "vesper-core/diagnostics",
+    "vesper-hle/diagnostics",
+    "vesper-loader/diagnostics",
+    "vesper-shader/diagnostics",
+]
+
+[lints]
+workspace = true

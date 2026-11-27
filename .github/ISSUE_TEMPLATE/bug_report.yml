@@ -1,0 +1,23 @@
+name: Bug Report
+description: Report a crash, rendering artifact, or build failure cleanly.
+title: "[BUG] <concise summary>"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do **not** attach proprietary executables, memory dumps, keys, or screenshots. Logs with addresses/flags only.
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware & Commit
+      placeholder: "GPU, VRAM, System RAM, Windows build, git commit"
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Steps to Reproduce, Switches & Log Snippet
+      description: List active VESPER_* switches and exact error/stderr snippet.
+    validations:
+      required: true

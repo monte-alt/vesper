@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Claimable Roadmap (Read First)
+    url: https://github.com/monte-alt/vesper/blob/main/ROADMAP.md
+    about: Pick an Open VSP-XX task before opening a Task Claim or Pull Request.
