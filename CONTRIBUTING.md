@@ -49,3 +49,5 @@ cargo test --workspace --locked -- --test-threads=1
 ```
 
 Never commit executables, decrypted assets, keys, dumps, screenshots, or third-party franchise/studio names ([Asset Policy](docs/asset-policy.md)).
+
+<!-- test PR check registration -->
