@@ -522,9 +522,9 @@ impl MenuState {
 fn pacing_preset_idx() -> usize {
     let ms = crate::live_controls::tex_stage_ms();
     let catchup = crate::live_controls::tex_catchup();
-    if !catchup && ms <= 10 {
+    if !catchup && ms <= 16 {
         0
-    } else if !catchup && ms <= 24 {
+    } else if !catchup && ms <= 48 {
         1
     } else {
         2
@@ -534,14 +534,14 @@ fn pacing_preset_idx() -> usize {
 fn apply_pacing_preset(idx: usize) {
     match idx {
         0 => {
-            crate::live_controls::set_tex_stage_ms(8);
-            crate::live_controls::set_tex_stage_mb(32);
+            crate::live_controls::set_tex_stage_ms(12);
+            crate::live_controls::set_tex_stage_mb(48);
             crate::live_controls::set_tex_catchup(false);
-            crate::live_controls::set_pressure_free_mb(2816);
+            crate::live_controls::set_pressure_free_mb(2560);
         }
         1 => {
-            crate::live_controls::set_tex_stage_ms(14);
-            crate::live_controls::set_tex_stage_mb(48);
+            crate::live_controls::set_tex_stage_ms(35);
+            crate::live_controls::set_tex_stage_mb(96);
             crate::live_controls::set_tex_catchup(false);
             crate::live_controls::set_pressure_free_mb(2560);
         }
@@ -815,7 +815,7 @@ pub(super) fn paint_menu(menu: &MenuState, hud: &HudSettings, snap: Option<&Snap
         }
         MenuTab::Pacing => {
             draw_row_bg(&mut c, 0, menu.focus_row == 0, "Pacing Preset", "Instant anti-stutter tuning");
-            draw_segmented(&mut c, row_y(0), &["Ultra 8ms", "Smooth 14ms", "Stock"], pacing_preset_idx(), menu.hover_pt);
+            draw_segmented(&mut c, row_y(0), &["Ultra 12ms", "Smooth 35ms", "Stock"], pacing_preset_idx(), menu.hover_pt);
 
             let stage_ms = crate::live_controls::tex_stage_ms();
             let ms_lbl = format!("{stage_ms}ms");
