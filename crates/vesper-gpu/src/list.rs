@@ -2809,11 +2809,11 @@ mod tests {
     #[test]
     fn barrier_summary_filters_reads_and_widens_indirect_and_vertex_targets() {
         const SYNC_ALL: u32 = 0x1;
-        const SYNC_VS: u32 = 0x4;
-        const SYNC_PS: u32 = 0x20;
+        const SYNC_VS: u32 = 0x8;
+        const SYNC_PS: u32 = 0x10;
         const SYNC_CS: u32 = 0x80;
-        const SYNC_RT: u32 = 0x200;
-        const SYNC_COPY: u32 = 0x400;
+        const SYNC_RT: u32 = 0x40;
+        const SYNC_COPY: u32 = 0x200;
         const SYNC_INDIRECT: u32 = 0x800;
         const SYNC_ALL_SHADING: u32 = 0x1000;
         const SYNC_SPLIT: u32 = 0x8000_0000;
@@ -3113,6 +3113,52 @@ mod tests {
             barriers: rel_srv.as_ptr().cast(),
         }];
         assert!(!summarize_barrier_groups(1, g_rel_srv.as_ptr().cast()).needs_sync());
+
+        let dsw_uav_global = [Buf([SYNC_ALL, SYNC_ALL, ACCESS_DS_WRITE | ACCESS_UAV, ACCESS_DS_WRITE | ACCESS_UAV, 0, 0, 0, 0, 0, 0])];
+        let g_dsw = [TitleBarrierGroup {
+            kind: 0,
+            num: 1,
+            barriers: dsw_uav_global.as_ptr().cast(),
+        }];
+        let s_dsw = summarize_barrier_groups(1, g_dsw.as_ptr().cast());
+        assert!(s_dsw.needs_sync());
+        #[cfg(windows)]
+        {
+            use windows::Win32::Graphics::Direct3D12::{
+                D3D12_BARRIER_ACCESS_COMMON, D3D12_BARRIER_SYNC_ALL,
+            };
+            let g = s_dsw.to_global_barrier();
+            assert_eq!(
+                (g.SyncBefore, g.SyncAfter, g.AccessBefore, g.AccessAfter),
+                (
+                    D3D12_BARRIER_SYNC_ALL,
+                    D3D12_BARRIER_SYNC_ALL,
+                    D3D12_BARRIER_ACCESS_COMMON,
+                    D3D12_BARRIER_ACCESS_COMMON
+                )
+            );
+        }
+
+        let vb_ia_uav = [Buf([0x4, SYNC_CS, 0x1, ACCESS_UAV, 0, 0, 0, 0, 0, 0])];
+        let g_vb_ia = [TitleBarrierGroup {
+            kind: 2,
+            num: 1,
+            barriers: vb_ia_uav.as_ptr().cast(),
+        }];
+        let s_vb_ia = summarize_barrier_groups(1, g_vb_ia.as_ptr().cast());
+        assert!(s_vb_ia.needs_sync());
+        #[cfg(windows)]
+        {
+            use windows::Win32::Graphics::Direct3D12::{
+                D3D12_BARRIER_ACCESS, D3D12_BARRIER_ACCESS_VERTEX_BUFFER, D3D12_BARRIER_SYNC,
+                D3D12_BARRIER_SYNC_ALL,
+            };
+            let g = s_vb_ia.to_global_barrier();
+            assert_eq!(g.SyncBefore, D3D12_BARRIER_SYNC_ALL);
+            assert_eq!(g.SyncAfter, D3D12_BARRIER_SYNC(SYNC_CS as i32));
+            assert_eq!(g.AccessBefore, D3D12_BARRIER_ACCESS_VERTEX_BUFFER);
+            assert_eq!(g.AccessAfter, D3D12_BARRIER_ACCESS(ACCESS_UAV as i32));
+        }
 
         let [w1, w2] = s.pack_words();
         assert_eq!(BarrierSummary::unpack_words(s.flags, w1, w2), s);
