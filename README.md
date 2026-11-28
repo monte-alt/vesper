@@ -116,10 +116,14 @@ scripts\launch.cmd "D:\path\to\your\title.exe"
 | `VESPER_PORT_DESCRIPTORS` / `VESPER_PORT_GUARD` / `VESPER_PORT_JOURNAL` | `1` / `1` / `1` | Patched descriptor slot tracking, block-level write guards, and partitioned submission journals |
 | `VESPER_WAIT_RESIDENT` | `textures` | Wait for streamed textures before use (**required** to avoid texture/face corruption) |
 | `VESPER_PARALLEL_LISTS` / `VESPER_LIST_THREADS` | `1` / `8` | Parallel command-list translation worker pool |
-| `VESPER_COALESCE_BARRIERS` / `VESPER_MERGE_LISTS` | `1` / `96` | Coalesce adjacent D3D12 barriers and merge small command lists |
-| `VESPER_OUTPUT` / `VESPER_BORDERLESS` | `1920x1080` / `1` | Override Series X render/output size (`unset` on Series S); borderless window with `ALLOW_TEARING` |
+| `VESPER_COALESCE_BARRIERS` / `VESPER_SMART_BARRIERS` / `VESPER_MERGE_LISTS` | `0` (`1` in launcher) / `1` / `96` | Coalesce adjacent D3D12 barriers, summarize enhanced barrier hazards, and merge small command lists |
+| `VESPER_RESIDENCY` / `VESPER_PRESSURE_PHYSICAL` / `VESPER_PRESSURE_FREE_MB` | `0` / `0` / `1536` (`1` / `1` / `2560` in launcher) | Host RAM residency admission, physical-memory pressure floor, and idle upload trimming |
+| `VESPER_TEXTURE_STAGE_MS` / `VESPER_TEXTURE_STAGE_MB` / `VESPER_TEXTURE_CATCHUP` | `250` / `0` / `1` (`35` / `96` / `0` in launcher) | Anti-stutter texture staging pacing budget and backlog burst control |
+| `VESPER_WINDOW_BUDGET_MB` / `VESPER_DEFER_FREE_FRAMES` | `unset` / `16–64` (`1024` / `8` in launcher) | Loose title-window copy byte budget and deferred retired resource/list cleanup lag |
+| `VESPER_OUTPUT` / `VESPER_BORDERLESS` / `VESPER_TEARING` | `1920x1080` / `1` / `1` | Override Series X render/output size (`unset` on Series S); borderless window with `ALLOW_TEARING` |
 | `VESPER_FSR_4K` / `VESPER_PC_FSR` | `quality` / `1` | Optional FidelityFX SDK 2.4 (`amd_fidelityfx_upscaler_dx12.dll`) upscaling |
 | `VESPER_HW_BVH` / `VESPER_BVH_BUILDER` | `0` / `0` | Experimental DXR / RDNA 4 hardware BVH4 indirect lighting |
+| `VESPER_PANEL` | `0` (`1` in launcher) | Interactive telemetry HUD (`F3`: Basic / Advanced / Off) and `~` live Control Center menu |
 | `VESPER_KBM_PC` | `0` | Optional PC keyboard & mouse mapping (`~`/`F2` mouse look lock, `VESPER_MOUSE_SENS`, `VESPER_MOUSE_INVERT_Y`) |
 
 See [`docs/architecture.md`](docs/architecture.md) and [`docs/fork-ray-tracing.md`](docs/fork-ray-tracing.md) for deep architectural notes.
