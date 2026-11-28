@@ -97,3 +97,26 @@ the lanes take, from structurisation), and accessed with a non-uniform heap
 index in one pass. `vesper translate`
 runs every shader it finds (containers, SGD5 files) through these and
 lists what they cannot handle yet.
+
+## Enhanced barriers, pacing & HUD
+
+- **Enhanced barrier summarization & coalescing (`list.rs`, `host/rec.rs`):**
+  At command-list record time, `summarize_barrier_groups` (`VESPER_SMART_BARRIERS`)
+  condenses title `GLOBAL`, `TEXTURE`, and `BUFFER` barrier groups into a small
+  `BarrierSummary` (avoiding dangling pointers across deferred thin-list replay)
+  while tracking split-barrier ends, acquire/release pairs, write-after-read
+  hazards, resolve destinations, and RTAS writes. `host::rec::Rec`
+  (`VESPER_COALESCE_BARRIERS`) merges adjacent enhanced global barriers and
+  normalizes layout-exclusive and `COMMON` transitions through the shared
+  `sanitize_global_barrier` helper.
+- **Residency & frame pacing (`residency.rs`, `live_controls.rs`):**
+  `VESPER_RESIDENCY=1` and `VESPER_PRESSURE_PHYSICAL=1` monitor host commit and
+  physical-RAM headroom (`VESPER_PRESSURE_FREE_MB`), throttling speculative
+  texture uploads and sweeping idle staging pools before OS OOM occurs.
+  Lock-free atomics in `live_controls` expose `VESPER_TEXTURE_STAGE_MS`,
+  `VESPER_TEXTURE_STAGE_MB`, `VESPER_TEXTURE_CATCHUP`, `VESPER_TEARING`, and
+  `VESPER_KBM_PC` defaults for runtime tuning.
+- **Telemetry HUD & control menu (`host/panel/`):**
+  `VESPER_PANEL=1` enables the `F3` Basic/Advanced telemetry overlay and `~`
+  interactive menu for adjusting ambient lighting, texture pacing, RAM pressure
+  floors, tearing, and input sensitivity live.
