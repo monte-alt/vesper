@@ -33,6 +33,19 @@ Vesper is free software licensed under the **GNU General Public License v3.0 or 
 
 ---
 
+## Subsystem Status
+
+| Subsystem | Crates | Status | Scope |
+|---|---|---|---|
+| PE32+ Loader & Imports | `vesper-pe`, `vesper-loader` | Working | Maps x64 images, resolves `imports`, and redirects static `TLS` slots |
+| Console HLE & Input | `vesper-hle` | Working | Implements `xgameruntime` and core console APIs; optional `VESPER_KBM_PC` |
+| D3D12 Translation & Barriers | `vesper-gpu` | Working | Agility `1.614.1` command list recording, descriptor porting, smart barriers |
+| Shader Pipeline & DXR | `vesper-shader`, `vesper-pipeline` | Working | SSA IR structurization and offline disk cache; HW BVH4 RT experimental |
+| Formats & Asset Codecs | `vesper-formats` | Working | `BCPack` stream decoding, GPU texture `tiling` / detiling, audio codecs |
+| Telemetry HUD & Control Menu | `vesper-gpu` (`host/panel`) | Working | `F3` Basic/Advanced frame-time HUD and `~` live-tuning overlay (`VESPER_PANEL`) |
+
+---
+
 ## Benchmarks & Progression
 
 All measurements below were captured on a **Windows 11 Pro** system running an **AMD Ryzen 7 5800X3D** (8C/16T, **32 GB DDR4**) and **AMD Radeon RX 9070 XT (16 GB VRAM)** across heavy opening gameplay sequences (ray tracing off unless noted):
