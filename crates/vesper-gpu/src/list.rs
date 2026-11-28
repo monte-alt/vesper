@@ -2329,11 +2329,12 @@ pub(crate) fn summarize_barrier_groups(count: u32, groups: *const u8) -> Barrier
     const ACCESS_SO: u32 = 0x100;
     const ACCESS_INDIRECT: u32 = 0x200;
     const ACCESS_COPY_DEST: u32 = 0x400;
-    const ACCESS_RT_AS_WRITE: u32 = 0x2_0000;
+    const ACCESS_RESOLVE_DEST: u32 = 0x1000;
+    const ACCESS_RT_AS_WRITE: u32 = 0x8000;
     const ACCESS_NO_ACCESS: u32 = 0x8000_0000;
 
     const BUFFER_WRITE: u32 = ACCESS_UAV | ACCESS_COPY_DEST | ACCESS_SO | ACCESS_RT_AS_WRITE;
-    const GLOBAL_WRITE: u32 = BUFFER_WRITE | ACCESS_RT | ACCESS_DS_WRITE;
+    const GLOBAL_WRITE: u32 = BUFFER_WRITE | ACCESS_RT | ACCESS_DS_WRITE | ACCESS_RESOLVE_DEST;
 
     let mut out = BarrierSummary::default();
     if count == 0 {
@@ -2422,7 +2423,7 @@ pub(crate) fn summarize_barrier_groups(count: u32, groups: *const u8) -> Barrier
                 // Texture layout transitions (RTV/DSV/read-to-read) are emitted by
                 // `HostList::transition`; keep UAV and COPY_DEST writes ordered for
                 // all subsequent consumers (including bindless SRV ped-face bakes).
-                1 => ab & (ACCESS_UAV | ACCESS_COPY_DEST) != 0,
+                1 => ab & (ACCESS_UAV | ACCESS_COPY_DEST | ACCESS_RESOLVE_DEST) != 0,
                 2 => ab == ACCESS_COMMON || (ab & BUFFER_WRITE != 0),
                 _ => false,
             };
@@ -2794,6 +2795,8 @@ mod tests {
         const ACCESS_SRV: u32 = 0x80;
         const ACCESS_INDIRECT: u32 = 0x200;
         const ACCESS_COPY_DEST: u32 = 0x400;
+        const ACCESS_RESOLVE_DEST: u32 = 0x1000;
+        const ACCESS_RT_AS_WRITE: u32 = 0x8000;
 
         #[repr(C)]
         struct Tex([u32; 16]);
@@ -2899,6 +2902,22 @@ mod tests {
         let s_common = summarize_barrier_groups(1, g_common.as_ptr().cast());
         assert!(s_common.needs_sync());
         assert_eq!((s_common.sync_before, s_common.sync_after), (SYNC_ALL, SYNC_ALL));
+
+        let rtas_buf = [Buf([SYNC_CS, SYNC_CS, ACCESS_RT_AS_WRITE, ACCESS_SRV, 0, 0, 0, 0, 0, 0])];
+        let g_rtas = [TitleBarrierGroup {
+            kind: 2,
+            num: 1,
+            barriers: rtas_buf.as_ptr().cast(),
+        }];
+        assert!(summarize_barrier_groups(1, g_rtas.as_ptr().cast()).needs_sync());
+
+        let resolve_tex = [Tex([SYNC_COPY, SYNC_PS, ACCESS_RESOLVE_DEST, ACCESS_SRV, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])];
+        let g_resolve = [TitleBarrierGroup {
+            kind: 1,
+            num: 1,
+            barriers: resolve_tex.as_ptr().cast(),
+        }];
+        assert!(summarize_barrier_groups(1, g_resolve.as_ptr().cast()).needs_sync());
 
         let [w1, w2] = s.pack_words();
         assert_eq!(BarrierSummary::unpack_words(s.flags, w1, w2), s);
