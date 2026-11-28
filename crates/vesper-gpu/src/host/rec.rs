@@ -187,6 +187,7 @@ unsafe fn emit_global(list7: &ID3D12GraphicsCommandList7, barrier: D3D12_GLOBAL_
 }
 
 fn merge_global(a: D3D12_GLOBAL_BARRIER, b: D3D12_GLOBAL_BARRIER) -> D3D12_GLOBAL_BARRIER {
+    const LAYOUT_EXCLUSIVE: i32 = 0x8 | 0x20 | 0x40 | 0x1000 | 0x2000 | 0x10000;
     let access_before = if a.AccessBefore == D3D12_BARRIER_ACCESS_COMMON || b.AccessBefore == D3D12_BARRIER_ACCESS_COMMON {
         D3D12_BARRIER_ACCESS_COMMON
     } else {
@@ -197,9 +198,36 @@ fn merge_global(a: D3D12_GLOBAL_BARRIER, b: D3D12_GLOBAL_BARRIER) -> D3D12_GLOBA
     } else {
         D3D12_BARRIER_ACCESS(a.AccessAfter.0 | b.AccessAfter.0)
     };
+    let layout_conflict = access_before != D3D12_BARRIER_ACCESS_COMMON
+        && access_after != D3D12_BARRIER_ACCESS_COMMON
+        && ((access_before.0 | access_after.0) & LAYOUT_EXCLUSIVE != 0)
+        && access_before != access_after;
+    if access_before == D3D12_BARRIER_ACCESS_COMMON
+        || layout_conflict
+        || (access_after == D3D12_BARRIER_ACCESS_COMMON && (access_before.0 & LAYOUT_EXCLUSIVE != 0))
+    {
+        return D3D12_GLOBAL_BARRIER {
+            SyncBefore: D3D12_BARRIER_SYNC_ALL,
+            SyncAfter: D3D12_BARRIER_SYNC_ALL,
+            AccessBefore: D3D12_BARRIER_ACCESS_COMMON,
+            AccessAfter: D3D12_BARRIER_ACCESS_COMMON,
+        };
+    }
+    let raw_sb = a.SyncBefore.0 | b.SyncBefore.0;
+    let sync_before = if (raw_sb & D3D12_BARRIER_SYNC_ALL.0) != 0 {
+        D3D12_BARRIER_SYNC_ALL
+    } else {
+        D3D12_BARRIER_SYNC(raw_sb)
+    };
+    let raw_sa = a.SyncAfter.0 | b.SyncAfter.0;
+    let sync_after = if access_after == D3D12_BARRIER_ACCESS_COMMON || (raw_sa & D3D12_BARRIER_SYNC_ALL.0) != 0 {
+        D3D12_BARRIER_SYNC_ALL
+    } else {
+        D3D12_BARRIER_SYNC(raw_sa)
+    };
     D3D12_GLOBAL_BARRIER {
-        SyncBefore: D3D12_BARRIER_SYNC(a.SyncBefore.0 | b.SyncBefore.0),
-        SyncAfter: D3D12_BARRIER_SYNC(a.SyncAfter.0 | b.SyncAfter.0),
+        SyncBefore: sync_before,
+        SyncAfter: sync_after,
         AccessBefore: access_before,
         AccessAfter: access_after,
     }
@@ -285,5 +313,40 @@ mod tests {
         let mc = merge_global(a, with_common);
         assert_eq!(mc.AccessBefore, D3D12_BARRIER_ACCESS_COMMON);
         assert_eq!(mc.AccessAfter, D3D12_BARRIER_ACCESS_COMMON);
+        assert_eq!(mc.SyncBefore, D3D12_BARRIER_SYNC_ALL);
+        assert_eq!(mc.SyncAfter, D3D12_BARRIER_SYNC_ALL);
+
+        let sync_all_pair = D3D12_GLOBAL_BARRIER {
+            SyncBefore: D3D12_BARRIER_SYNC_ALL,
+            SyncAfter: D3D12_BARRIER_SYNC_ALL,
+            ..b
+        };
+        let ma = merge_global(a, sync_all_pair);
+        assert_eq!(ma.SyncBefore, D3D12_BARRIER_SYNC_ALL);
+        assert_eq!(ma.SyncAfter, D3D12_BARRIER_SYNC_ALL);
+
+        let with_common_before = D3D12_GLOBAL_BARRIER {
+            SyncBefore: D3D12_BARRIER_SYNC_ALL,
+            SyncAfter: D3D12_BARRIER_SYNC_PIXEL_SHADING,
+            AccessBefore: D3D12_BARRIER_ACCESS_COMMON,
+            AccessAfter: D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+        };
+        let mcb = merge_global(a, with_common_before);
+        assert_eq!(mcb.AccessBefore, D3D12_BARRIER_ACCESS_COMMON);
+        assert_eq!(mcb.AccessAfter, D3D12_BARRIER_ACCESS_COMMON);
+        assert_eq!(mcb.SyncBefore, D3D12_BARRIER_SYNC_ALL);
+        assert_eq!(mcb.SyncAfter, D3D12_BARRIER_SYNC_ALL);
+
+        let rt_rt = D3D12_GLOBAL_BARRIER {
+            SyncBefore: D3D12_BARRIER_SYNC_RENDER_TARGET,
+            SyncAfter: D3D12_BARRIER_SYNC_RENDER_TARGET,
+            AccessBefore: D3D12_BARRIER_ACCESS_RENDER_TARGET,
+            AccessAfter: D3D12_BARRIER_ACCESS_RENDER_TARGET,
+        };
+        let mrt = merge_global(a, rt_rt);
+        assert_eq!(mrt.AccessBefore, D3D12_BARRIER_ACCESS_COMMON);
+        assert_eq!(mrt.AccessAfter, D3D12_BARRIER_ACCESS_COMMON);
+        assert_eq!(mrt.SyncBefore, D3D12_BARRIER_SYNC_ALL);
+        assert_eq!(mrt.SyncAfter, D3D12_BARRIER_SYNC_ALL);
     }
 }
