@@ -199,8 +199,11 @@ pub fn reset_defaults() {
 mod tests {
     use super::*;
 
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn pacing_controls_clamp_and_reset() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_tex_stage_ms(1);
         assert_eq!(tex_stage_ms(), 4);
         set_tex_stage_ms(999);
@@ -231,5 +234,47 @@ mod tests {
         assert_eq!(tex_stage_ms(), default_tex_stage_ms());
         assert_eq!(tex_stage_mb(), default_tex_stage_mb());
         assert_eq!(pressure_free_mb(), default_pressure_free_mb());
+    }
+
+    #[test]
+    fn input_and_present_controls_clamp_and_reset() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_menu_open(true);
+        assert!(menu_open());
+        set_menu_open(false);
+        assert!(!menu_open());
+
+        set_mouse_sens(0.01);
+        assert_eq!(mouse_sens(), 0.1);
+        set_mouse_sens(99.0);
+        assert_eq!(mouse_sens(), 5.0);
+        set_mouse_sens(f32::NAN);
+        assert_eq!(mouse_sens(), 1.0);
+        set_mouse_sens(f32::INFINITY);
+        assert_eq!(mouse_sens(), 1.0);
+        set_mouse_sens(2.25);
+        assert_eq!(mouse_sens(), 2.25);
+
+        set_mouse_invert_y(true);
+        assert!(mouse_invert_y());
+        set_kbm_enabled(true);
+        assert!(kbm_enabled());
+        set_tearing_enabled(false);
+        assert!(!tearing_enabled());
+
+        reset_defaults();
+        assert_eq!(mouse_sens(), default_sens());
+        assert_eq!(
+            mouse_invert_y(),
+            std::env::var("VESPER_MOUSE_INVERT_Y").is_ok_and(|v| parse_flag(&v))
+        );
+        assert_eq!(
+            kbm_enabled(),
+            std::env::var("VESPER_KBM_PC").is_ok_and(|v| parse_flag(&v))
+        );
+        assert_eq!(
+            tearing_enabled(),
+            std::env::var_os("VESPER_TEARING").is_none_or(|v| v != "0")
+        );
     }
 }
