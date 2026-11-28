@@ -186,26 +186,22 @@ unsafe fn emit_global(list7: &ID3D12GraphicsCommandList7, barrier: D3D12_GLOBAL_
     unsafe { list7.Barrier(&[group]) };
 }
 
-fn merge_global(a: D3D12_GLOBAL_BARRIER, b: D3D12_GLOBAL_BARRIER) -> D3D12_GLOBAL_BARRIER {
-    const LAYOUT_EXCLUSIVE: i32 = 0x8 | 0x20 | 0x40 | 0x1000 | 0x2000 | 0x10000;
-    let access_before = if a.AccessBefore == D3D12_BARRIER_ACCESS_COMMON || b.AccessBefore == D3D12_BARRIER_ACCESS_COMMON {
-        D3D12_BARRIER_ACCESS_COMMON
-    } else {
-        D3D12_BARRIER_ACCESS(a.AccessBefore.0 | b.AccessBefore.0)
-    };
-    let access_after = if a.AccessAfter == D3D12_BARRIER_ACCESS_COMMON || b.AccessAfter == D3D12_BARRIER_ACCESS_COMMON {
-        D3D12_BARRIER_ACCESS_COMMON
-    } else {
-        D3D12_BARRIER_ACCESS(a.AccessAfter.0 | b.AccessAfter.0)
-    };
-    let layout_conflict = access_before != D3D12_BARRIER_ACCESS_COMMON
-        && access_after != D3D12_BARRIER_ACCESS_COMMON
-        && ((access_before.0 | access_after.0) & LAYOUT_EXCLUSIVE != 0)
+/// Sanitizes merged or summarized global barrier flags so layout-exclusive
+/// accesses and `COMMON` transitions satisfy D3D12 Enhanced Barrier rules.
+pub(crate) fn sanitize_global_barrier(
+    sync_before: u32,
+    sync_after: u32,
+    access_before: u32,
+    access_after: u32,
+    common_before: bool,
+    common_after: bool,
+) -> D3D12_GLOBAL_BARRIER {
+    const LAYOUT_EXCLUSIVE: u32 = 0x8 | 0x20 | 0x40 | 0x1000 | 0x2000 | 0x10000;
+    let layout_conflict = !common_before
+        && !common_after
+        && ((access_before | access_after) & LAYOUT_EXCLUSIVE != 0)
         && access_before != access_after;
-    if access_before == D3D12_BARRIER_ACCESS_COMMON
-        || layout_conflict
-        || (access_after == D3D12_BARRIER_ACCESS_COMMON && (access_before.0 & LAYOUT_EXCLUSIVE != 0))
-    {
+    if common_before || layout_conflict || (common_after && (access_before & LAYOUT_EXCLUSIVE != 0)) {
         return D3D12_GLOBAL_BARRIER {
             SyncBefore: D3D12_BARRIER_SYNC_ALL,
             SyncAfter: D3D12_BARRIER_SYNC_ALL,
@@ -213,17 +209,21 @@ fn merge_global(a: D3D12_GLOBAL_BARRIER, b: D3D12_GLOBAL_BARRIER) -> D3D12_GLOBA
             AccessAfter: D3D12_BARRIER_ACCESS_COMMON,
         };
     }
-    let raw_sb = a.SyncBefore.0 | b.SyncBefore.0;
-    let sync_before = if (raw_sb & D3D12_BARRIER_SYNC_ALL.0) != 0 {
-        D3D12_BARRIER_SYNC_ALL
+    let access_before = D3D12_BARRIER_ACCESS(access_before as i32);
+    let access_after = if common_after {
+        D3D12_BARRIER_ACCESS_COMMON
     } else {
-        D3D12_BARRIER_SYNC(raw_sb)
+        D3D12_BARRIER_ACCESS(access_after as i32)
     };
-    let raw_sa = a.SyncAfter.0 | b.SyncAfter.0;
-    let sync_after = if access_after == D3D12_BARRIER_ACCESS_COMMON || (raw_sa & D3D12_BARRIER_SYNC_ALL.0) != 0 {
+    let sync_before = if (sync_before as i32 & D3D12_BARRIER_SYNC_ALL.0) != 0 {
         D3D12_BARRIER_SYNC_ALL
     } else {
-        D3D12_BARRIER_SYNC(raw_sa)
+        D3D12_BARRIER_SYNC(sync_before as i32)
+    };
+    let sync_after = if common_after || (sync_after as i32 & D3D12_BARRIER_SYNC_ALL.0) != 0 {
+        D3D12_BARRIER_SYNC_ALL
+    } else {
+        D3D12_BARRIER_SYNC(sync_after as i32)
     };
     D3D12_GLOBAL_BARRIER {
         SyncBefore: sync_before,
@@ -231,6 +231,21 @@ fn merge_global(a: D3D12_GLOBAL_BARRIER, b: D3D12_GLOBAL_BARRIER) -> D3D12_GLOBA
         AccessBefore: access_before,
         AccessAfter: access_after,
     }
+}
+
+fn merge_global(a: D3D12_GLOBAL_BARRIER, b: D3D12_GLOBAL_BARRIER) -> D3D12_GLOBAL_BARRIER {
+    let common_before = a.AccessBefore == D3D12_BARRIER_ACCESS_COMMON || b.AccessBefore == D3D12_BARRIER_ACCESS_COMMON;
+    let common_after = a.AccessAfter == D3D12_BARRIER_ACCESS_COMMON || b.AccessAfter == D3D12_BARRIER_ACCESS_COMMON;
+    let access_before = if common_before { 0 } else { (a.AccessBefore.0 | b.AccessBefore.0) as u32 };
+    let access_after = if common_after { 0 } else { (a.AccessAfter.0 | b.AccessAfter.0) as u32 };
+    sanitize_global_barrier(
+        (a.SyncBefore.0 | b.SyncBefore.0) as u32,
+        (a.SyncAfter.0 | b.SyncAfter.0) as u32,
+        access_before,
+        access_after,
+        common_before,
+        common_after,
+    )
 }
 
 fn is_global_uav(b: &D3D12_RESOURCE_BARRIER) -> bool {

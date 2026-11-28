@@ -2265,7 +2265,6 @@ impl BarrierSummary {
     const COMMON_BEFORE: u8 = 1 << 1;
     const COMMON_AFTER: u8 = 1 << 2;
     const FALLBACK_UAV: u8 = 1 << 3;
-    const LAYOUT_EXCLUSIVE: u32 = 0x8 | 0x20 | 0x40 | 0x1000 | 0x2000 | 0x10000;
 
     pub(crate) const fn pack_words(&self) -> [u64; 2] {
         [
@@ -2294,49 +2293,14 @@ impl BarrierSummary {
 
     #[cfg(windows)]
     pub(crate) fn to_global_barrier(self) -> windows::Win32::Graphics::Direct3D12::D3D12_GLOBAL_BARRIER {
-        use windows::Win32::Graphics::Direct3D12::{
-            D3D12_BARRIER_ACCESS, D3D12_BARRIER_ACCESS_COMMON, D3D12_BARRIER_SYNC,
-            D3D12_BARRIER_SYNC_ALL, D3D12_GLOBAL_BARRIER,
-        };
-        let common_before = self.flags & Self::COMMON_BEFORE != 0;
-        let common_after = self.flags & Self::COMMON_AFTER != 0;
-        let layout_conflict = !common_before
-            && !common_after
-            && ((self.access_before | self.access_after) & Self::LAYOUT_EXCLUSIVE != 0)
-            && self.access_before != self.access_after;
-        let force_all_common = common_before
-            || layout_conflict
-            || (common_after && (self.access_before & Self::LAYOUT_EXCLUSIVE != 0));
-        if force_all_common {
-            return D3D12_GLOBAL_BARRIER {
-                SyncBefore: D3D12_BARRIER_SYNC_ALL,
-                SyncAfter: D3D12_BARRIER_SYNC_ALL,
-                AccessBefore: D3D12_BARRIER_ACCESS_COMMON,
-                AccessAfter: D3D12_BARRIER_ACCESS_COMMON,
-            };
-        }
-        let access_before = D3D12_BARRIER_ACCESS(self.access_before as i32);
-        let access_after = if common_after {
-            D3D12_BARRIER_ACCESS_COMMON
-        } else {
-            D3D12_BARRIER_ACCESS(self.access_after as i32)
-        };
-        let sync_before = if (self.sync_before as i32 & D3D12_BARRIER_SYNC_ALL.0) != 0 {
-            D3D12_BARRIER_SYNC_ALL
-        } else {
-            D3D12_BARRIER_SYNC(self.sync_before as i32)
-        };
-        let sync_after = if common_after || ((self.sync_after as i32 & D3D12_BARRIER_SYNC_ALL.0) != 0) {
-            D3D12_BARRIER_SYNC_ALL
-        } else {
-            D3D12_BARRIER_SYNC(self.sync_after as i32)
-        };
-        D3D12_GLOBAL_BARRIER {
-            SyncBefore: sync_before,
-            SyncAfter: sync_after,
-            AccessBefore: access_before,
-            AccessAfter: access_after,
-        }
+        crate::host::rec::sanitize_global_barrier(
+            self.sync_before,
+            self.sync_after,
+            self.access_before,
+            self.access_after,
+            self.flags & Self::COMMON_BEFORE != 0,
+            self.flags & Self::COMMON_AFTER != 0,
+        )
     }
 }
 
