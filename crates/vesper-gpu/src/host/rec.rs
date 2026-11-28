@@ -126,6 +126,7 @@ impl Rec {
     /// # Safety
     /// An open list.
     pub(crate) unsafe fn enhanced_global(&self, barrier: D3D12_GLOBAL_BARRIER) -> bool {
+        let barrier = normalize_global_barrier(barrier);
         let Some(list7) = &self.list7 else {
             return false;
         };
@@ -186,8 +187,71 @@ unsafe fn emit_global(list7: &ID3D12GraphicsCommandList7, barrier: D3D12_GLOBAL_
     unsafe { list7.Barrier(&[group]) };
 }
 
+/// Known `D3D12_BARRIER_ACCESS` bits in `[0..=16]` (`SHADING_RATE_SOURCE` and below).
+const KNOWN_ACCESS: i32 = 0x1_ffff;
+/// Texture-layout-exclusive `D3D12_BARRIER_ACCESS` bits (`RT`, `DS_*`, `RESOLVE_*`, `SHADING_RATE`).
+const LAYOUT_EXCLUSIVE: i32 = 0x8 | 0x20 | 0x40 | 0x1000 | 0x2000 | 0x10000;
+
+/// Exact `(AccessBit, AllowedSyncMask)` compatibility matrix for non-layout
+/// `D3D12_GLOBAL_BARRIER` accesses verified against `D3D12Core.dll`.
+const NON_LAYOUT_ACCESS_SYNC: [(i32, i32); 11] = [
+    (0x0001, 0x2 | 0x8 | 0x1000 | 0x2000),                                            // VERTEX_BUFFER
+    (0x0002, 0x2 | 0x8 | 0x10 | 0x80 | 0x1000 | 0x2000),                              // CONSTANT_BUFFER
+    (0x0004, 0x2 | 0x4),                                                              // INDEX_BUFFER
+    (0x0010, 0x2 | 0x8 | 0x10 | 0x80 | 0x100 | 0x1000 | 0x2000 | 0x4000 | 0x800000 | 0x1000000), // UAV
+    (0x0080, 0x2 | 0x8 | 0x10 | 0x80 | 0x100 | 0x1000 | 0x2000 | 0x800000),           // SRV
+    (0x0100, 0x2 | 0x8 | 0x1000 | 0x2000),                                            // STREAM_OUTPUT
+    (0x0200, 0x2 | 0x800),                                                            // INDIRECT_ARGUMENT
+    (0x0400, 0x200),                                                                  // COPY_DEST
+    (0x0800, 0x200),                                                                  // COPY_SOURCE
+    (0x4000, 0x80 | 0x100 | 0x1000 | 0x2000 | 0x4000 | 0x800000 | 0x1000000),         // RTAS_READ
+    (0x8000, 0x80 | 0x100 | 0x1000 | 0x2000 | 0x800000 | 0x1000000),                  // RTAS_WRITE
+];
+
+fn normalize_sync(sync: D3D12_BARRIER_SYNC, access: D3D12_BARRIER_ACCESS) -> D3D12_BARRIER_SYNC {
+    if access == D3D12_BARRIER_ACCESS_COMMON || sync.0 == 0 || (sync.0 & D3D12_BARRIER_SYNC_ALL.0) != 0 {
+        return D3D12_BARRIER_SYNC_ALL;
+    }
+    let mut union_allowed = 0i32;
+    for &(bit, allowed) in &NON_LAYOUT_ACCESS_SYNC {
+        if access.0 & bit != 0 {
+            if sync.0 & allowed == 0 {
+                return D3D12_BARRIER_SYNC_ALL;
+            }
+            union_allowed |= allowed;
+        }
+    }
+    if (sync.0 & !union_allowed) != 0 {
+        return D3D12_BARRIER_SYNC_ALL;
+    }
+    sync
+}
+
+/// Normalizes a `D3D12_GLOBAL_BARRIER` so it always satisfies Agility SDK
+/// `D3D12Core.dll` and debug-layer rules (`AccessBefore == COMMON` pairing, no
+/// layout-exclusive or unknown access bits, and per-access compatible sync masks).
+pub(crate) fn normalize_global_barrier(b: D3D12_GLOBAL_BARRIER) -> D3D12_GLOBAL_BARRIER {
+    let ab = b.AccessBefore.0;
+    let aa = b.AccessAfter.0;
+    if b.AccessBefore == D3D12_BARRIER_ACCESS_COMMON || ((ab | aa) & (!KNOWN_ACCESS | LAYOUT_EXCLUSIVE) != 0) {
+        return D3D12_GLOBAL_BARRIER {
+            SyncBefore: D3D12_BARRIER_SYNC_ALL,
+            SyncAfter: D3D12_BARRIER_SYNC_ALL,
+            AccessBefore: D3D12_BARRIER_ACCESS_COMMON,
+            AccessAfter: D3D12_BARRIER_ACCESS_COMMON,
+        };
+    }
+    D3D12_GLOBAL_BARRIER {
+        SyncBefore: normalize_sync(b.SyncBefore, b.AccessBefore),
+        SyncAfter: normalize_sync(b.SyncAfter, b.AccessAfter),
+        AccessBefore: b.AccessBefore,
+        AccessAfter: b.AccessAfter,
+    }
+}
+
 /// Sanitizes merged or summarized global barrier flags so layout-exclusive
-/// accesses and `COMMON` transitions satisfy D3D12 Enhanced Barrier rules.
+/// accesses, incompatible sync bits, and `COMMON` transitions satisfy D3D12
+/// Enhanced Barrier rules.
 pub(crate) fn sanitize_global_barrier(
     sync_before: u32,
     sync_after: u32,
@@ -196,41 +260,28 @@ pub(crate) fn sanitize_global_barrier(
     common_before: bool,
     common_after: bool,
 ) -> D3D12_GLOBAL_BARRIER {
-    const LAYOUT_EXCLUSIVE: u32 = 0x8 | 0x20 | 0x40 | 0x1000 | 0x2000 | 0x10000;
-    let layout_conflict = !common_before
-        && !common_after
-        && ((access_before | access_after) & LAYOUT_EXCLUSIVE != 0)
-        && access_before != access_after;
-    if common_before || layout_conflict || (common_after && (access_before & LAYOUT_EXCLUSIVE != 0)) {
-        return D3D12_GLOBAL_BARRIER {
-            SyncBefore: D3D12_BARRIER_SYNC_ALL,
-            SyncAfter: D3D12_BARRIER_SYNC_ALL,
-            AccessBefore: D3D12_BARRIER_ACCESS_COMMON,
-            AccessAfter: D3D12_BARRIER_ACCESS_COMMON,
-        };
-    }
-    let access_before = D3D12_BARRIER_ACCESS(access_before as i32);
-    let access_after = if common_after {
-        D3D12_BARRIER_ACCESS_COMMON
-    } else {
-        D3D12_BARRIER_ACCESS(access_after as i32)
-    };
-    let sync_before = if (sync_before as i32 & D3D12_BARRIER_SYNC_ALL.0) != 0 {
-        D3D12_BARRIER_SYNC_ALL
-    } else {
-        D3D12_BARRIER_SYNC(sync_before as i32)
-    };
-    let sync_after = if common_after || (sync_after as i32 & D3D12_BARRIER_SYNC_ALL.0) != 0 {
-        D3D12_BARRIER_SYNC_ALL
-    } else {
-        D3D12_BARRIER_SYNC(sync_after as i32)
-    };
-    D3D12_GLOBAL_BARRIER {
-        SyncBefore: sync_before,
-        SyncAfter: sync_after,
-        AccessBefore: access_before,
-        AccessAfter: access_after,
-    }
+    normalize_global_barrier(D3D12_GLOBAL_BARRIER {
+        SyncBefore: if common_before {
+            D3D12_BARRIER_SYNC_ALL
+        } else {
+            D3D12_BARRIER_SYNC(sync_before as i32)
+        },
+        SyncAfter: if common_after {
+            D3D12_BARRIER_SYNC_ALL
+        } else {
+            D3D12_BARRIER_SYNC(sync_after as i32)
+        },
+        AccessBefore: if common_before {
+            D3D12_BARRIER_ACCESS_COMMON
+        } else {
+            D3D12_BARRIER_ACCESS(access_before as i32)
+        },
+        AccessAfter: if common_after {
+            D3D12_BARRIER_ACCESS_COMMON
+        } else {
+            D3D12_BARRIER_ACCESS(access_after as i32)
+        },
+    })
 }
 
 fn merge_global(a: D3D12_GLOBAL_BARRIER, b: D3D12_GLOBAL_BARRIER) -> D3D12_GLOBAL_BARRIER {
@@ -363,5 +414,83 @@ mod tests {
         assert_eq!(mrt.AccessAfter, D3D12_BARRIER_ACCESS_COMMON);
         assert_eq!(mrt.SyncBefore, D3D12_BARRIER_SYNC_ALL);
         assert_eq!(mrt.SyncAfter, D3D12_BARRIER_SYNC_ALL);
+
+        let dsw_uav = normalize_global_barrier(D3D12_GLOBAL_BARRIER {
+            SyncBefore: D3D12_BARRIER_SYNC_ALL,
+            SyncAfter: D3D12_BARRIER_SYNC_ALL,
+            AccessBefore: D3D12_BARRIER_ACCESS(0x30),
+            AccessAfter: D3D12_BARRIER_ACCESS(0x30),
+        });
+        assert_eq!(
+            (dsw_uav.SyncBefore, dsw_uav.SyncAfter, dsw_uav.AccessBefore, dsw_uav.AccessAfter),
+            (
+                D3D12_BARRIER_SYNC_ALL,
+                D3D12_BARRIER_SYNC_ALL,
+                D3D12_BARRIER_ACCESS_COMMON,
+                D3D12_BARRIER_ACCESS_COMMON
+            )
+        );
+
+        let bad_rt_sync = normalize_global_barrier(D3D12_GLOBAL_BARRIER {
+            SyncBefore: D3D12_BARRIER_SYNC(0x40 | 0x80),
+            SyncAfter: D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+            AccessBefore: D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+            AccessAfter: D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+        });
+        assert_eq!(bad_rt_sync.SyncBefore, D3D12_BARRIER_SYNC_ALL);
+        assert_eq!(bad_rt_sync.SyncAfter, D3D12_BARRIER_SYNC_COMPUTE_SHADING);
+        assert_eq!(bad_rt_sync.AccessBefore, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+        assert_eq!(bad_rt_sync.AccessAfter, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+
+        let bad_vb_ia = normalize_global_barrier(D3D12_GLOBAL_BARRIER {
+            SyncBefore: D3D12_BARRIER_SYNC(0x4),
+            SyncAfter: D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+            AccessBefore: D3D12_BARRIER_ACCESS_VERTEX_BUFFER,
+            AccessAfter: D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+        });
+        assert_eq!(bad_vb_ia.SyncBefore, D3D12_BARRIER_SYNC_ALL);
+        assert_eq!(bad_vb_ia.AccessBefore, D3D12_BARRIER_ACCESS_VERTEX_BUFFER);
+        assert_eq!(bad_vb_ia.AccessAfter, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+
+        let unknown_acc = normalize_global_barrier(D3D12_GLOBAL_BARRIER {
+            SyncBefore: D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+            SyncAfter: D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+            AccessBefore: D3D12_BARRIER_ACCESS(0x20000),
+            AccessAfter: D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+        });
+        assert_eq!(
+            (unknown_acc.SyncBefore, unknown_acc.SyncAfter, unknown_acc.AccessBefore, unknown_acc.AccessAfter),
+            (
+                D3D12_BARRIER_SYNC_ALL,
+                D3D12_BARRIER_SYNC_ALL,
+                D3D12_BARRIER_ACCESS_COMMON,
+                D3D12_BARRIER_ACCESS_COMMON
+            )
+        );
+
+        let valid_compound = merge_global(
+            D3D12_GLOBAL_BARRIER {
+                SyncBefore: D3D12_BARRIER_SYNC_COPY,
+                SyncAfter: D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                AccessBefore: D3D12_BARRIER_ACCESS_COPY_DEST,
+                AccessAfter: D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+            },
+            D3D12_GLOBAL_BARRIER {
+                SyncBefore: D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                SyncAfter: D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                AccessBefore: D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                AccessAfter: D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+            },
+        );
+        assert_eq!(
+            valid_compound.SyncBefore,
+            D3D12_BARRIER_SYNC(D3D12_BARRIER_SYNC_COPY.0 | D3D12_BARRIER_SYNC_COMPUTE_SHADING.0)
+        );
+        assert_eq!(valid_compound.SyncAfter, D3D12_BARRIER_SYNC_COMPUTE_SHADING);
+        assert_eq!(
+            valid_compound.AccessBefore,
+            D3D12_BARRIER_ACCESS(D3D12_BARRIER_ACCESS_COPY_DEST.0 | D3D12_BARRIER_ACCESS_UNORDERED_ACCESS.0)
+        );
+        assert_eq!(valid_compound.AccessAfter, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
     }
 }
