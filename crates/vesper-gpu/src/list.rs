@@ -2335,6 +2335,9 @@ pub(crate) fn summarize_barrier_groups(count: u32, groups: *const u8) -> Barrier
 
     const BUFFER_WRITE: u32 = ACCESS_UAV | ACCESS_COPY_DEST | ACCESS_SO | ACCESS_RT_AS_WRITE;
     const GLOBAL_WRITE: u32 = BUFFER_WRITE | ACCESS_RT | ACCESS_DS_WRITE | ACCESS_RESOLVE_DEST;
+    const WAR_WRITE: u32 = ACCESS_UAV | ACCESS_COPY_DEST | ACCESS_RESOLVE_DEST | ACCESS_RT_AS_WRITE;
+    const ACQUIRE_TARGET: u32 =
+        ACCESS_UAV | ACCESS_SRV | ACCESS_COPY_DEST | ACCESS_RESOLVE_DEST | ACCESS_INDIRECT;
 
     let mut out = BarrierSummary::default();
     if count == 0 {
@@ -2346,32 +2349,32 @@ pub(crate) fn summarize_barrier_groups(count: u32, groups: *const u8) -> Barrier
     }
 
     let accumulate = |out: &mut BarrierSummary, mut sb: u32, mut sa: u32, ab: u32, aa: u32| {
-        if sb == SYNC_SPLIT {
-            sb = SYNC_ALL;
-        }
         // Vesper's indirect argument clamp runs as a compute SRV pass before
         // ExecuteIndirect; widen indirect targets so compute waits for the writer.
         if (sa & SYNC_INDIRECT != 0) || (aa & ACCESS_INDIRECT != 0) {
             sa |= SYNC_COMPUTE;
-            if aa != ACCESS_COMMON {
-                // Keep COMMON unmasked; otherwise include SRV for raw reads.
+            if aa != ACCESS_COMMON && aa != ACCESS_NO_ACCESS {
+                // Keep COMMON/NO_ACCESS unmasked; otherwise include SRV for raw reads.
                 out.access_after |= ACCESS_SRV;
             }
         }
         // Translated VS/MS stages may read vertex/index buffers as raw SRVs.
         if aa & (ACCESS_VB | ACCESS_IB) != 0 {
             sa |= SYNC_ALL_SHADING;
-            if aa != ACCESS_COMMON {
+            if aa != ACCESS_COMMON && aa != ACCESS_NO_ACCESS {
                 out.access_after |= ACCESS_SRV;
             }
         }
-        if ab == ACCESS_COMMON {
+        // D3D12 Enhanced Global Barriers require SYNC_ALL whenever Access is
+        // COMMON and forbid NO_ACCESS / SYNC_NONE; map split-ends and transient
+        // acquire/release sides onto SYNC_ALL + COMMON.
+        if sb == SYNC_NONE || sb == SYNC_SPLIT || ab == ACCESS_COMMON || ab == ACCESS_NO_ACCESS {
             sb = SYNC_ALL;
             out.flags |= BarrierSummary::COMMON_BEFORE;
         } else {
             out.access_before |= ab;
         }
-        if aa == ACCESS_COMMON {
+        if sa == SYNC_NONE || aa == ACCESS_COMMON || aa == ACCESS_NO_ACCESS {
             sa = SYNC_ALL;
             out.flags |= BarrierSummary::COMMON_AFTER;
         } else {
@@ -2415,17 +2418,45 @@ pub(crate) fn summarize_barrier_groups(count: u32, groups: *const u8) -> Barrier
             // the first 16 bytes of Global, Texture, and Buffer barriers are
             // always `[SyncBefore, SyncAfter, AccessBefore, AccessAfter]`.
             let [sb, sa, ab, aa] = unsafe { std::ptr::read_unaligned(g.barriers.add(j * stride).cast::<[u32; 4]>()) };
-            if sb == SYNC_NONE || sa == SYNC_NONE || sa == SYNC_SPLIT || ab == ACCESS_NO_ACCESS || aa == ACCESS_NO_ACCESS {
+            if sa == SYNC_SPLIT {
                 continue;
             }
-            let include = match g.kind {
-                0 => ab == ACCESS_COMMON || (ab & GLOBAL_WRITE != 0),
-                // Texture layout transitions (RTV/DSV/read-to-read) are emitted by
-                // `HostList::transition`; keep UAV and COPY_DEST writes ordered for
-                // all subsequent consumers (including bindless SRV ped-face bakes).
-                1 => ab & (ACCESS_UAV | ACCESS_COPY_DEST | ACCESS_RESOLVE_DEST) != 0,
-                2 => ab == ACCESS_COMMON || (ab & BUFFER_WRITE != 0),
-                _ => false,
+            let split_end = sb == SYNC_SPLIT;
+            let acquire = !split_end && (sb == SYNC_NONE || ab == ACCESS_NO_ACCESS);
+            let release = !split_end && (sa == SYNC_NONE || aa == ACCESS_NO_ACCESS);
+            let include = if split_end {
+                sa != SYNC_NONE && aa != ACCESS_NO_ACCESS
+            } else if acquire && release {
+                false
+            } else if acquire {
+                aa == ACCESS_COMMON || (aa & ACQUIRE_TARGET != 0)
+            } else if release {
+                ab == ACCESS_COMMON || (ab & WAR_WRITE != 0)
+            } else {
+                match g.kind {
+                    0 => {
+                        ab == ACCESS_COMMON
+                            || aa == ACCESS_COMMON
+                            || (ab & GLOBAL_WRITE != 0)
+                            || (aa & WAR_WRITE != 0)
+                    }
+                    // Texture layout transitions (RTV/DSV/read-to-read) are emitted by
+                    // `HostList::transition`; keep UAV, COPY_DEST, RESOLVE_DEST, WAR
+                    // writes, and COMMON transitions ordered for all consumers.
+                    1 => {
+                        ab == ACCESS_COMMON
+                            || aa == ACCESS_COMMON
+                            || (ab & (ACCESS_UAV | ACCESS_COPY_DEST | ACCESS_RESOLVE_DEST) != 0)
+                            || (aa & WAR_WRITE != 0)
+                    }
+                    2 => {
+                        ab == ACCESS_COMMON
+                            || aa == ACCESS_COMMON
+                            || (ab & BUFFER_WRITE != 0)
+                            || (aa & (WAR_WRITE | ACCESS_SO) != 0)
+                    }
+                    _ => false,
+                }
             };
             if include {
                 accumulate(&mut out, sb, sa, ab, aa);
@@ -2797,6 +2828,7 @@ mod tests {
         const ACCESS_COPY_DEST: u32 = 0x400;
         const ACCESS_RESOLVE_DEST: u32 = 0x1000;
         const ACCESS_RT_AS_WRITE: u32 = 0x8000;
+        const ACCESS_NO_ACCESS: u32 = 0x8000_0000;
 
         #[repr(C)]
         struct Tex([u32; 16]);
@@ -2893,6 +2925,50 @@ mod tests {
         assert!(s.needs_sync());
         assert_eq!(s.sync_before, SYNC_ALL);
 
+        let split_end_buf = [Buf([SYNC_SPLIT, SYNC_CS, ACCESS_NO_ACCESS, ACCESS_UAV, 0, 0, 0, 0, 0, 0])];
+        let g_se_buf = [TitleBarrierGroup {
+            kind: 2,
+            num: 1,
+            barriers: split_end_buf.as_ptr().cast(),
+        }];
+        let s = summarize_barrier_groups(1, g_se_buf.as_ptr().cast());
+        assert!(s.needs_sync());
+        assert_eq!(s.sync_before, SYNC_ALL);
+        assert_eq!(s.sync_after, SYNC_CS);
+        assert_eq!(s.access_after, ACCESS_UAV);
+        #[cfg(windows)]
+        {
+            use windows::Win32::Graphics::Direct3D12::{
+                D3D12_BARRIER_ACCESS_COMMON, D3D12_BARRIER_SYNC_ALL,
+            };
+            let g = s.to_global_barrier();
+            assert_eq!(g.SyncBefore, D3D12_BARRIER_SYNC_ALL);
+            assert_eq!(g.AccessBefore, D3D12_BARRIER_ACCESS_COMMON);
+            assert_eq!(g.SyncAfter, D3D12_BARRIER_SYNC_ALL);
+            assert_eq!(g.AccessAfter, D3D12_BARRIER_ACCESS_COMMON);
+        }
+
+        let split_end_tex = [Tex([SYNC_SPLIT, SYNC_PS, ACCESS_NO_ACCESS, ACCESS_SRV, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])];
+        let g_se_tex = [TitleBarrierGroup {
+            kind: 1,
+            num: 1,
+            barriers: split_end_tex.as_ptr().cast(),
+        }];
+        let s_tex = summarize_barrier_groups(1, g_se_tex.as_ptr().cast());
+        assert!(s_tex.needs_sync());
+        assert_eq!((s_tex.sync_before, s_tex.sync_after, s_tex.access_after), (SYNC_ALL, SYNC_PS, ACCESS_SRV));
+        #[cfg(windows)]
+        {
+            use windows::Win32::Graphics::Direct3D12::{
+                D3D12_BARRIER_ACCESS_COMMON, D3D12_BARRIER_SYNC_ALL,
+            };
+            let g = s_tex.to_global_barrier();
+            assert_eq!(g.SyncBefore, D3D12_BARRIER_SYNC_ALL);
+            assert_eq!(g.AccessBefore, D3D12_BARRIER_ACCESS_COMMON);
+            assert_eq!(g.SyncAfter, D3D12_BARRIER_SYNC_ALL);
+            assert_eq!(g.AccessAfter, D3D12_BARRIER_ACCESS_COMMON);
+        }
+
         let common_pair = [Buf([SYNC_CS, SYNC_PS, ACCESS_COMMON, ACCESS_COMMON, 0, 0, 0, 0, 0, 0])];
         let g_common = [TitleBarrierGroup {
             kind: 2,
@@ -2918,6 +2994,125 @@ mod tests {
             barriers: resolve_tex.as_ptr().cast(),
         }];
         assert!(summarize_barrier_groups(1, g_resolve.as_ptr().cast()).needs_sync());
+
+        let war_tex = [Tex([SYNC_PS, SYNC_CS, ACCESS_SRV, ACCESS_UAV, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])];
+        let g_war_tex = [TitleBarrierGroup {
+            kind: 1,
+            num: 1,
+            barriers: war_tex.as_ptr().cast(),
+        }];
+        let s_war_tex = summarize_barrier_groups(1, g_war_tex.as_ptr().cast());
+        assert!(s_war_tex.needs_sync());
+        assert_eq!(
+            (s_war_tex.sync_before, s_war_tex.sync_after, s_war_tex.access_before, s_war_tex.access_after),
+            (SYNC_PS, SYNC_CS, ACCESS_SRV, ACCESS_UAV)
+        );
+        #[cfg(windows)]
+        {
+            use windows::Win32::Graphics::Direct3D12::{D3D12_BARRIER_ACCESS, D3D12_BARRIER_SYNC};
+            let g = s_war_tex.to_global_barrier();
+            assert_eq!(g.SyncBefore, D3D12_BARRIER_SYNC(SYNC_PS as i32));
+            assert_eq!(g.SyncAfter, D3D12_BARRIER_SYNC(SYNC_CS as i32));
+            assert_eq!(g.AccessBefore, D3D12_BARRIER_ACCESS(ACCESS_SRV as i32));
+            assert_eq!(g.AccessAfter, D3D12_BARRIER_ACCESS(ACCESS_UAV as i32));
+        }
+
+        let war_rt_uav = [Tex([SYNC_RT, SYNC_CS, ACCESS_RT, ACCESS_UAV, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])];
+        let g_war_rt = [TitleBarrierGroup {
+            kind: 1,
+            num: 1,
+            barriers: war_rt_uav.as_ptr().cast(),
+        }];
+        let s_war_rt = summarize_barrier_groups(1, g_war_rt.as_ptr().cast());
+        assert!(s_war_rt.needs_sync());
+        #[cfg(windows)]
+        {
+            use windows::Win32::Graphics::Direct3D12::{
+                D3D12_BARRIER_ACCESS_COMMON, D3D12_BARRIER_SYNC_ALL,
+            };
+            let g = s_war_rt.to_global_barrier();
+            assert_eq!(
+                (g.SyncBefore, g.SyncAfter, g.AccessBefore, g.AccessAfter),
+                (
+                    D3D12_BARRIER_SYNC_ALL,
+                    D3D12_BARRIER_SYNC_ALL,
+                    D3D12_BARRIER_ACCESS_COMMON,
+                    D3D12_BARRIER_ACCESS_COMMON
+                )
+            );
+        }
+
+        let war_buf_copy = [Buf([SYNC_CS, SYNC_COPY, ACCESS_SRV, ACCESS_COPY_DEST, 0, 0, 0, 0, 0, 0])];
+        let g_war_buf = [TitleBarrierGroup {
+            kind: 2,
+            num: 1,
+            barriers: war_buf_copy.as_ptr().cast(),
+        }];
+        assert!(summarize_barrier_groups(1, g_war_buf.as_ptr().cast()).needs_sync());
+
+        let acq_uav = [Buf([0, SYNC_CS, ACCESS_NO_ACCESS, ACCESS_UAV, 0, 0, 0, 0, 0, 0])];
+        let g_acq_uav = [TitleBarrierGroup {
+            kind: 2,
+            num: 1,
+            barriers: acq_uav.as_ptr().cast(),
+        }];
+        let s_acq = summarize_barrier_groups(1, g_acq_uav.as_ptr().cast());
+        assert!(s_acq.needs_sync());
+        assert_eq!((s_acq.sync_before, s_acq.sync_after, s_acq.access_after), (SYNC_ALL, SYNC_CS, ACCESS_UAV));
+        #[cfg(windows)]
+        {
+            use windows::Win32::Graphics::Direct3D12::{
+                D3D12_BARRIER_ACCESS_COMMON, D3D12_BARRIER_SYNC_ALL,
+            };
+            let g = s_acq.to_global_barrier();
+            assert_eq!(
+                (g.SyncBefore, g.SyncAfter, g.AccessBefore, g.AccessAfter),
+                (
+                    D3D12_BARRIER_SYNC_ALL,
+                    D3D12_BARRIER_SYNC_ALL,
+                    D3D12_BARRIER_ACCESS_COMMON,
+                    D3D12_BARRIER_ACCESS_COMMON
+                )
+            );
+        }
+
+        let acq_rt = [Tex([0, SYNC_RT, ACCESS_NO_ACCESS, ACCESS_RT, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])];
+        let g_acq_rt = [TitleBarrierGroup {
+            kind: 1,
+            num: 1,
+            barriers: acq_rt.as_ptr().cast(),
+        }];
+        assert!(!summarize_barrier_groups(1, g_acq_rt.as_ptr().cast()).needs_sync());
+
+        let rel_uav = [Buf([SYNC_CS, 0, ACCESS_UAV, ACCESS_NO_ACCESS, 0, 0, 0, 0, 0, 0])];
+        let g_rel_uav = [TitleBarrierGroup {
+            kind: 2,
+            num: 1,
+            barriers: rel_uav.as_ptr().cast(),
+        }];
+        let s_rel = summarize_barrier_groups(1, g_rel_uav.as_ptr().cast());
+        assert!(s_rel.needs_sync());
+        assert_eq!((s_rel.sync_before, s_rel.sync_after, s_rel.access_before), (SYNC_CS, SYNC_ALL, ACCESS_UAV));
+        #[cfg(windows)]
+        {
+            use windows::Win32::Graphics::Direct3D12::{
+                D3D12_BARRIER_ACCESS, D3D12_BARRIER_ACCESS_COMMON, D3D12_BARRIER_SYNC,
+                D3D12_BARRIER_SYNC_ALL,
+            };
+            let g = s_rel.to_global_barrier();
+            assert_eq!(g.SyncBefore, D3D12_BARRIER_SYNC(SYNC_CS as i32));
+            assert_eq!(g.AccessBefore, D3D12_BARRIER_ACCESS(ACCESS_UAV as i32));
+            assert_eq!(g.SyncAfter, D3D12_BARRIER_SYNC_ALL);
+            assert_eq!(g.AccessAfter, D3D12_BARRIER_ACCESS_COMMON);
+        }
+
+        let rel_srv = [Tex([SYNC_PS, 0, ACCESS_SRV, ACCESS_NO_ACCESS, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])];
+        let g_rel_srv = [TitleBarrierGroup {
+            kind: 1,
+            num: 1,
+            barriers: rel_srv.as_ptr().cast(),
+        }];
+        assert!(!summarize_barrier_groups(1, g_rel_srv.as_ptr().cast()).needs_sync());
 
         let [w1, w2] = s.pack_words();
         assert_eq!(BarrierSummary::unpack_words(s.flags, w1, w2), s);
